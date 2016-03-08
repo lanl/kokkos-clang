@@ -1,0 +1,68 @@
+IDEAS Kokkos/Compiler Project
+
+Pat McCormick (pat@lanl.gov), Nick Moss (nickm@lanl.gov)
+
+====== Project Description / Status
+
+-A Clang-based compiler for compiling Kokkos code (with no syntactical differences)
+with the aim of generating highly optimized code for specific targets
+such a multithreaded and GPU (NVIDIA/CUDA).
+
+-Runtime for thread pooling, synching, function queueing, and GPU - run kernel
+from PTX, manage device memory for Kokkos views, and device <-> host memory
+transfer.
+
+-Both multithreaded and GPU modes intercept the code generation process
+that would normally be followed when encountering a parallel for - analyze C++
+templated parts of the AST to pull out the compile-time information needed 
+for interface to the runtime.
+
+-Multithreaded mode generates "closures" for a parallel for's
+which wrap the arguments and values and generate and IR function -> 
+queuable functions to the runtime.
+
+-GPU mode generates a kernel for each parallel for -- and IR function w/ 
+transformations which gets code-generated to PTX and embedded in the module - 
+use CUDA driver library to launch kernels, allocate memory, etc.
+
+-GPU: translate CPU-side Kokkos views runtime and static dimensions
+into device memory - translate view indexing into cuda array index
+
+-GPU: runtime manages device memory for Kokkos views - analyze read/write
+patterns in the kernels and copies memory to/from device only as needed - 
+device memory for shared views across kernels is reused/persistent
+
+-Currently looking into dynamic parallelism for nested forall launches.
+
+-Powerful LLVM foundation - each kernel is IR which can be analyzed and
+manipulated - possibile further optimizations: warp/divergence, shared memory,
+better overlap IO, different memory layouts for views, view slicing, module wide optimizations across different kernels... many possibilities exist for
+transforming/optimizing the generated code without requiring any changes
+or instrumentation to the user's original Kokkkos code.
+
+====== Code
+
+  -runtime resides in top-level runtime directory
+
+  -to locate the places within LLVM/Clang which were modified/extended, 
+    grep for "=== ideas"
+
+====== Building
+
+  -from the top-level ideas directory, e.g:
+
+  -mkdir build
+
+  -cd build
+
+  -cmake ..
+
+  -make
+
+====== Running
+
+  -The build process creates a C++/Clang compiler in build/llvm/bin which can be used
+  just like an ordinary clang++ compiler
+
+  -When run on Kokko's code containing parallel for's in main() it will
+  generate optimized code for either multithreaded or GPU/NVIDIA/CUDA
