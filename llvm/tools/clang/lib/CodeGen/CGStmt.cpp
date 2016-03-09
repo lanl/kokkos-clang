@@ -922,6 +922,7 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
 
     Value* val = B.CreateLoad(ideasAddr(sPtr));
     Value* ci = B.CreateCall(func, args2);
+    //Value* ci = llvm::ConstantFP::get(rt, 1.0);
     val = reduceOp(B, reduceType, val, ci);
     B.CreateStore(val, ideasAddr(sPtr));
 
@@ -937,6 +938,7 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
     args2 = args;
     args2.push_back(B.CreateAdd(i, i256));
     ci = B.CreateCall(func, args2);
+    //ci = llvm::ConstantFP::get(rt, 1.0);
     val = reduceOp(B, reduceType, val, ci);
     B.CreateStore(val, ideasAddr(sPtr));
     B.CreateBr(Merge2Block);

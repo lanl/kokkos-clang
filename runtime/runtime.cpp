@@ -268,10 +268,8 @@ namespace{
   ThreadPool* _threadPool = new ThreadPool;
 
   template<class T>
-  void sum_(CUdeviceptr& ptr, size_t size, void* resultPtr){
+  void sum_(T* hostPtr, CUdeviceptr& ptr, size_t size, void* resultPtr){
     size_t bytes = size * sizeof(T);
-
-    T* hostPtr = (T*)malloc(bytes);
 
     CUresult err = cuMemcpyDtoH(hostPtr, ptr, bytes);
     check(err);
@@ -282,14 +280,11 @@ namespace{
     }
 
     memcpy(resultPtr, &result, sizeof(T));
-    free(hostPtr);
   }
 
   template<class T>
-  void product_(CUdeviceptr& ptr, size_t size, void* resultPtr){
+  void product_(T* hostPtr, CUdeviceptr& ptr, size_t size, void* resultPtr){
     size_t bytes = size * sizeof(T);
-
-    T* hostPtr = (T*)malloc(bytes);
 
     CUresult err = cuMemcpyDtoH(hostPtr, ptr, bytes);
     check(err);
@@ -300,10 +295,10 @@ namespace{
     }
 
     memcpy(resultPtr, &result, sizeof(T));
-    free(hostPtr);
   }
 
-  void reduce(CUdeviceptr& ptr,
+  void reduce(void* hostPtr,
+              CUdeviceptr& ptr,
               size_t size,
               size_t scalarBytes,
               bool isFloat,
@@ -314,27 +309,27 @@ namespace{
       case 8:
         if(isFloat){
           if(isSum){
-            sum_<double>(ptr, size, resultPtr);
+            sum_<double>((double*)hostPtr, ptr, size, resultPtr);
           }
           else{
-            product_<double>(ptr, size, resultPtr);
+            product_<double>((double*)hostPtr, ptr, size, resultPtr);
           }
         }
         else{
           if(isSigned){
             if(isSum){
-              sum_<int64_t>(ptr, size, resultPtr);
+              sum_<int64_t>((int64_t*)hostPtr, ptr, size, resultPtr);
             }
             else{
-              product_<int64_t>(ptr, size, resultPtr);
+              product_<int64_t>((int64_t*)hostPtr, ptr, size, resultPtr);
             }
           }
           else{
             if(isSum){
-              sum_<uint64_t>(ptr, size, resultPtr);
+              sum_<uint64_t>((uint64_t*)hostPtr, ptr, size, resultPtr);
             }
             else{
-              product_<uint64_t>(ptr, size, resultPtr);
+              product_<uint64_t>((uint64_t*)hostPtr, ptr, size, resultPtr);
             }
           }
         }
@@ -342,27 +337,27 @@ namespace{
       case 4:
         if(isFloat){
           if(isSum){
-            sum_<float>(ptr, size, resultPtr);
+            sum_<float>((float*)hostPtr, ptr, size, resultPtr);
           }
           else{
-            product_<float>(ptr, size, resultPtr);
+            product_<float>((float*)hostPtr, ptr, size, resultPtr);
           }
         }
         else{
           if(isSigned){
             if(isSum){
-              sum_<int32_t>(ptr, size, resultPtr);
+              sum_<int32_t>((int32_t*)hostPtr, ptr, size, resultPtr);
             }
             else{
-              product_<int32_t>(ptr, size, resultPtr);
+              product_<int32_t>((int32_t*)hostPtr, ptr, size, resultPtr);
             }
           }
           else{
             if(isSum){
-              sum_<uint32_t>(ptr, size, resultPtr);
+              sum_<uint32_t>((uint32_t*)hostPtr, ptr, size, resultPtr);
             }
             else{
-              product_<uint32_t>(ptr, size, resultPtr);
+              product_<uint32_t>((uint32_t*)hostPtr, ptr, size, resultPtr);
             }
           }
         }
@@ -374,18 +369,18 @@ namespace{
         else{
           if(isSigned){
             if(isSum){
-              sum_<int16_t>(ptr, size, resultPtr);
+              sum_<int16_t>((int16_t*)hostPtr, ptr, size, resultPtr);
             }
             else{
-              product_<int16_t>(ptr, size, resultPtr);
+              product_<int16_t>((int16_t*)hostPtr, ptr, size, resultPtr);
             }
           }
           else{
             if(isSum){
-              sum_<uint16_t>(ptr, size, resultPtr);
+              sum_<uint16_t>((uint16_t*)hostPtr, ptr, size, resultPtr);
             }
             else{
-              product_<uint16_t>(ptr, size, resultPtr);
+              product_<uint16_t>((uint16_t*)hostPtr, ptr, size, resultPtr);
             }
           }
         }
@@ -397,18 +392,18 @@ namespace{
         else{
           if(isSigned){
             if(isSum){
-              sum_<int8_t>(ptr, size, resultPtr);
+              sum_<int8_t>((int8_t*)hostPtr, ptr, size, resultPtr);
             }
             else{
-              product_<int8_t>(ptr, size, resultPtr);
+              product_<int8_t>((int8_t*)hostPtr, ptr, size, resultPtr);
             }
           }
           else{
             if(isSum){
-              sum_<uint8_t>(ptr, size, resultPtr);
+              sum_<uint8_t>((uint8_t*)hostPtr, ptr, size, resultPtr);
             }
             else{
-              product_<uint8_t>(ptr, size, resultPtr);
+              product_<uint8_t>((uint8_t*)hostPtr, ptr, size, resultPtr);
             }
           }
         }
@@ -555,10 +550,12 @@ namespace{
           
           if(n_ != lastSize_){
             if(lastSize_ > 0){
+              free(hostPtr_);
               CUresult err = cuMemFree(reducePtr_);
               check(err);
             }
 
+            hostPtr_ = malloc(gridDimX * reduceSize_);
             CUresult err = cuMemAlloc(&reducePtr_, gridDimX * reduceSize_);
             check(err);
           }
@@ -662,8 +659,8 @@ namespace{
         if(reduceRetPtr){
           lastSize_ = n;
 
-          reduce(reducePtr_, gridDimX, reduceSize_, reduceFloat_, reduceSigned_, 
-                 reduceSum_, reduceRetPtr);
+          reduce(hostPtr_, reducePtr_, gridDimX, reduceSize_, reduceFloat_,
+                 reduceSigned_, reduceSum_, reduceRetPtr);
         }
       }
       
@@ -683,6 +680,7 @@ namespace{
       bool reduceFloat_;
       bool reduceSigned_;
       bool reduceSum_;
+      void* hostPtr_;
       CUdeviceptr reducePtr_;
       CUdeviceptr fakeSharedPtr_;
       bool ready_;
@@ -842,7 +840,7 @@ namespace{
 
   private:
     using ViewMap_ = map<void*, View*>;
-    using KernelMap_ = map<uint32_t, Kernel*>;
+    using KernelMap_ = unordered_map<uint32_t, Kernel*>;
 
     bool initalized_ = false;
 
