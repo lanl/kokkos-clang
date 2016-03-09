@@ -6,14 +6,14 @@ default: build
 
 CXX = ../../build/llvm/bin/clang++ -std=c++14 -isystem /projects/opt/centos7/gcc/5.2.0/include/c++/5.2.0 -I/projects/opt/centos7/gcc/5.2.0/include/c++/5.2.0/x86_64-unknown-linux-gnu
 LINK = ${CXX}
-LINKFLAGS = -L/home/nickm/ideas_cuda/build -L/home/nickm/ideas/build/runtime -L/usr/local/cuda/lib64 -L/projects/opt/centos7/gcc/5.2.0/packages/gcc-5.2.0/lib64 
+LINKFLAGS = -L/home/nickm/ideas/build/runtime -L/usr/local/cuda/lib64 -L/projects/opt/centos7/gcc/5.2.0/packages/gcc-5.2.0/lib64 
 EXE = $(SRC:.cpp=.host)
 KOKKOS_DEVICES = "Pthread"
 KOKKOS_ARCH = "SNB"
 DEPFLAGS = -M
 
 OBJ = $(SRC:.cpp=.o)
-LIB = -lideas_runtime -lideas_runtime_cuda -lcuda -lcudart 
+LIB = -lideas_runtime -lcuda -lcudart 
 
 include $(KOKKOS_PATH)/Makefile.kokkos
 

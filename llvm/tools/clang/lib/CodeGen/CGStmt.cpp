@@ -969,10 +969,11 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
     B.CreateCondBr(cond, Cond3Block, Merge3Block);
     B.SetInsertPoint(Cond3Block);
 
-    val = B.CreateLoad(idxAddr);
+    val = B.CreateLoad(ideasAddr(sPtr));
     Value* idx128 = B.CreateGEP(reduceShared, B.CreateAdd(threadId, i128));
     Value* v128 = B.CreateLoad(ideasAddr(idx128));
     val = reduceOp(B, reduceType, val, v128);
+    B.CreateStore(val, ideasAddr(sPtr));
     B.CreateStore(val, idxAddr);
     B.CreateBr(Merge3Block);
 
@@ -989,10 +990,11 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
     B.CreateCondBr(cond, Cond4Block, Merge4Block);
     B.SetInsertPoint(Cond4Block);
 
-    val = B.CreateLoad(idxAddr);
+    val = B.CreateLoad(ideasAddr(sPtr));
     Value* idx64 = B.CreateGEP(reduceShared, B.CreateAdd(threadId, i64));
     Value* v64 = B.CreateLoad(ideasAddr(idx64));
     val = reduceOp(B, reduceType, val, v64);
+    B.CreateStore(val, ideasAddr(sPtr));
     B.CreateStore(val, idxAddr);
     B.CreateBr(Merge4Block);
 
@@ -1009,114 +1011,67 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
     B.CreateCondBr(cond, Cond5Block, Merge5Block);
     B.SetInsertPoint(Cond5Block);
 
-    val = B.CreateLoad(idxAddr);
+    val = B.CreateLoad(ideasAddr(sPtr));
     Value* idx32 = B.CreateGEP(reduceShared, B.CreateAdd(threadId, i32));
     Value* v32 = B.CreateLoad(ideasAddr(idx32));
     val = reduceOp(B, reduceType, val, v32);
+    B.CreateStore(val, ideasAddr(sPtr));
     B.CreateStore(val, idxAddr);
-    B.CreateBr(Merge5Block);
-
-    B.SetInsertPoint(Merge5Block);
 
     B.CreateCall(barrierFunc);
 
     // cond 16
 
-    BasicBlock* Cond6Block = createBasicBlock("cond6", reduceFunc);
-    BasicBlock* Merge6Block = createBasicBlock("merge6", reduceFunc);
-
-    cond = B.CreateICmpULT(threadId, i16);
-    B.CreateCondBr(cond, Cond6Block, Merge6Block);
-    B.SetInsertPoint(Cond6Block);
-
-    val = B.CreateLoad(idxAddr);
+    val = B.CreateLoad(ideasAddr(sPtr));
     Value* idx16 = B.CreateGEP(reduceShared, B.CreateAdd(threadId, i16));
     Value* v16 = B.CreateLoad(ideasAddr(idx16));
     val = reduceOp(B, reduceType, val, v16);
+    B.CreateStore(val, ideasAddr(sPtr));
     B.CreateStore(val, idxAddr);
-    B.CreateBr(Merge6Block);
-
-    B.SetInsertPoint(Merge6Block);
 
     B.CreateCall(barrierFunc);
 
     // cond 8
 
-    BasicBlock* Cond7Block = createBasicBlock("cond7", reduceFunc);
-    BasicBlock* Merge7Block = createBasicBlock("merge7", reduceFunc);
-
-    cond = B.CreateICmpULT(threadId, i8);
-    B.CreateCondBr(cond, Cond7Block, Merge7Block);
-    B.SetInsertPoint(Cond7Block);
-
-    val = B.CreateLoad(idxAddr);
+    val = B.CreateLoad(ideasAddr(sPtr));
     Value* idx8 = B.CreateGEP(reduceShared, B.CreateAdd(threadId, i8));
     Value* v8 = B.CreateLoad(ideasAddr(idx8));
     val = reduceOp(B, reduceType, val, v8);
+    B.CreateStore(val, ideasAddr(sPtr));
     B.CreateStore(val, idxAddr);
-    B.CreateBr(Merge7Block);
-
-    B.SetInsertPoint(Merge7Block);
 
     B.CreateCall(barrierFunc);
 
     // cond 4
 
-    BasicBlock* Cond8Block = createBasicBlock("cond8", reduceFunc);
-    BasicBlock* Merge8Block = createBasicBlock("merge8", reduceFunc);
-
-    cond = B.CreateICmpULT(threadId, i4);
-    B.CreateCondBr(cond, Cond8Block, Merge8Block);
-    B.SetInsertPoint(Cond8Block);
-
-    val = B.CreateLoad(idxAddr);
+    val = B.CreateLoad(ideasAddr(sPtr));
     Value* idx4 = B.CreateGEP(reduceShared, B.CreateAdd(threadId, i4));
     Value* v4 = B.CreateLoad(ideasAddr(idx4));
     val = reduceOp(B, reduceType, val, v4);
+    B.CreateStore(val, ideasAddr(sPtr));
     B.CreateStore(val, idxAddr);
-    B.CreateBr(Merge8Block);
-
-    B.SetInsertPoint(Merge8Block);
 
     B.CreateCall(barrierFunc);
 
     // cond 2
 
-    BasicBlock* Cond9Block = createBasicBlock("cond9", reduceFunc);
-    BasicBlock* Merge9Block = createBasicBlock("merge9", reduceFunc);
-
-    cond = B.CreateICmpULT(threadId, i2);
-    B.CreateCondBr(cond, Cond9Block, Merge9Block);
-    B.SetInsertPoint(Cond9Block);
-
-    val = B.CreateLoad(idxAddr);
+    val = B.CreateLoad(ideasAddr(sPtr));
     Value* idx2 = B.CreateGEP(reduceShared, B.CreateAdd(threadId, i2));
     Value* v2 = B.CreateLoad(ideasAddr(idx2));
     val = reduceOp(B, reduceType, val, v2);
+    B.CreateStore(val, ideasAddr(sPtr));
     B.CreateStore(val, idxAddr);
-    B.CreateBr(Merge9Block);
-
-    B.SetInsertPoint(Merge9Block);
 
     B.CreateCall(barrierFunc);
 
     // cond 1
 
-    BasicBlock* Cond10Block = createBasicBlock("cond10", reduceFunc);
-    BasicBlock* Merge10Block = createBasicBlock("merge10", reduceFunc);
-
-    cond = B.CreateICmpULT(threadId, i1);
-    B.CreateCondBr(cond, Cond10Block, Merge10Block);
-    B.SetInsertPoint(Cond10Block);
-
-    val = B.CreateLoad(idxAddr);
+    val = B.CreateLoad(ideasAddr(sPtr));
     Value* idx1 = B.CreateGEP(reduceShared, B.CreateAdd(threadId, i1));
     Value* v1 = B.CreateLoad(ideasAddr(idx1));
     val = reduceOp(B, reduceType, val, v1);
+    B.CreateStore(val, ideasAddr(sPtr));
     B.CreateStore(val, idxAddr);
-    B.CreateBr(Merge10Block);
-
-    B.SetInsertPoint(Merge10Block);
 
     B.CreateCall(barrierFunc);
 
@@ -1131,12 +1086,16 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
     B.SetInsertPoint(Cond12Block);
 
     Value* idx0 = B.CreateGEP(reduceShared, i0);
-    val = B.CreateLoad(ideasAddr(idx0));
+    val = B.CreateLoad(ideasAddr(sPtr));
     Value* idxOut = B.CreateGEP(reduceArray, blockIdx);
     B.CreateStore(val, ideasAddr(idxOut));
     B.CreateBr(Merge12Block);
 
     B.SetInsertPoint(Merge12Block);
+
+    B.CreateBr(Merge5Block);
+
+    B.SetInsertPoint(Merge5Block);
 
     B.CreateRetVoid();
   }
