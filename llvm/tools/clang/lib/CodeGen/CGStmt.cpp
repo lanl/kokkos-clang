@@ -686,9 +686,11 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
                              &ptxModule);
 
     auto aitr2 = reduceFunc->arg_begin();
-    for(auto& arg : func->args()){
-      aitr2->setName(arg.getName());
-      ++aitr;
+    auto aitr3 = func->arg_begin();
+    while(aitr3 != reduceIndex){
+      aitr2->setName(aitr3->getName());
+      ++aitr3;
+      ++aitr2;
     }
 
     reduceN = aitr2;
@@ -715,6 +717,12 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
   ReturnBlock = getJumpDestInCurrentScope("return");
 
   B.SetInsertPoint(entry);
+
+  for(const VarDecl* vd : captureVars){
+    Value* varPtr = B.CreateAlloca(ConvertType(vd->getType()));
+    B.CreateStore(aitrCapture++, ideasAddr(varPtr));
+    parallelForParamMap_[vd] = varPtr;
+  }
 
   Value* reducePtr2;
 
@@ -765,12 +773,6 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
     setAddrOfLocalVar(indexVar, ideasAddr(indexPtr));  
   }
   else{
-    for(const VarDecl* vd : captureVars){
-      Value* varPtr = B.CreateAlloca(ConvertType(vd->getType()));
-      B.CreateStore(aitrCapture++, ideasAddr(varPtr));
-      parallelForParamMap_[vd] = varPtr;
-    }
-
     Value* threadIdx = B.CreateCall(KR.getSREGFunc("tid.x"));
     Value* blockIdx = B.CreateCall(KR.getSREGFunc("ctaid.x"));
     Value* blockDim = B.CreateCall(KR.getSREGFunc("ntid.x"));

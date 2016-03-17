@@ -11,9 +11,11 @@ const size_t SIZE = 1048576;
 int main (int argc, char* argv[]) {
   Kokkos::initialize(argc, argv);
 
+  double a = 1.1;
+
   double sum = 1.0;
   Kokkos::parallel_reduce(SIZE, KOKKOS_LAMBDA (const int i, double& lsum){
-    lsum += 1.00000;
+    lsum += a;
   }, sum);
 
   cout << "sum = " << sum << endl;
