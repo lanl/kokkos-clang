@@ -168,6 +168,12 @@ CGIdeasRuntime::CudaInitKernelFunc(){
 }
 
 llvm::Function*
+CGIdeasRuntime::CudaInitKernel2Func(){
+  return GetFunc("__ideas_cuda_init_kernel2",
+                 {Int32Ty, VoidPtrTy, Int32Ty, Int1Ty, Int1Ty, Int1Ty}, Int1Ty);
+}
+
+llvm::Function*
 CGIdeasRuntime::CudaLaunchDeviceFunc(){
   llvm::Type* pt = llvm::ArrayType::get(Int8Ty, 12);
   //pt->setAlignment(4);
@@ -191,6 +197,11 @@ CGIdeasRuntime::CudaAddVarFunc(){
 llvm::Function*
 CGIdeasRuntime::CudaRunKernelFunc(){
   return GetFunc("__ideas_cuda_run_kernel", {Int32Ty, Int32Ty, VoidPtrTy});
+}
+
+llvm::Function*
+CGIdeasRuntime::CudaRunKernel2Func(){
+  return GetFunc("__ideas_cuda_run_kernel2", {Int32Ty, Int32Ty, VoidPtrTy});
 }
 
 llvm::Function*

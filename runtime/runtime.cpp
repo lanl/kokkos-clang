@@ -17,7 +17,8 @@
 
 #include <cuda.h>
 
-//#define COPY 1
+//#define COPY_IN 1
+//#define COPY_OUT 1
 
 using namespace std;
 //using namespace ideas;
@@ -516,6 +517,29 @@ namespace{
         check(err);
       }
 
+      Kernel(bool kernel2,
+             char* ptx,
+             uint32_t reduceSize,
+             bool reduceFloat,
+             bool reduceSigned,
+             bool reduceSum)
+        : ready_(false),
+          reduceSize_(reduceSize),
+          reduceFloat_(reduceFloat),
+          reduceSigned_(reduceSigned),
+          reduceSum_(reduceSum),
+          lastSize_(0),
+          numThreads_(DEFAULT_THREADS){
+        
+        // ndm - finish implementing
+
+        CUresult err = cuModuleLoadData(&module_, (void*)ptx);
+        check(err);
+
+        err = cuModuleGetFunction(&function_, module_, "run");
+        check(err);
+      }
+
       ~Kernel(){
 
       }
@@ -606,7 +630,7 @@ namespace{
 
         CUresult err;
 
-#ifdef COPY
+#ifdef COPY_IN
         for(KernelView* kernelView : views_){
           View* view = kernelView->view();
 
@@ -642,7 +666,7 @@ namespace{
 
         check(err);
 
-#ifdef COPY
+#ifdef COPY_OUT
         for(KernelView* kernelView : views_){
           View* view = kernelView->view();
 
@@ -663,6 +687,88 @@ namespace{
                  reduceSigned_, reduceSum_, reduceRetPtr);
         }
       }
+
+      void run2(uint32_t n, void* reduceRetPtr){
+        n_ = n;
+        size_t gridDimX;
+
+        if(!ready_){
+          for(KernelView* kernelView : views_){
+            View* view = kernelView->view();
+
+            kernelParams_.push_back(&view->devPtr());
+            
+            auto& dims = view->dims();
+
+            /*
+            for(auto di : dims){
+              ndump(di);
+            }
+            */
+
+            CUresult err = cuMemAlloc(&view->dimsPtr(), dims.size() * 4);
+            check(err);
+
+            err = cuMemcpyHtoD(view->dimsPtr(), dims.data(),
+                               dims.size() * 4);
+            check(err);
+
+            kernelParams_.push_back(&view->dimsPtr());
+          }
+
+          for(void* varPtr : vars_){
+            kernelParams_.push_back(varPtr);
+          }
+
+          kernelParams_.push_back(&n_);
+
+          if(reduceSize_ > 0){
+            kernelParams_.push_back(&reducePtr_);
+          }
+
+          ready_ = true;
+        }
+
+        CUresult err;
+
+#ifdef COPY_IN
+        for(KernelView* kernelView : views_){
+          View* view = kernelView->view();
+
+          /*
+          double* dp = (double*)view->hostPtr();
+          for(size_t i = 0; i < view->size()/8; ++i){
+            cout << "dp[" << i << "] = " << dp[i] << endl;
+          }
+          */
+
+          if(kernelView->isRead()){
+            err = cuMemcpyHtoD(view->devPtr(), view->hostPtr(),
+                               view->size());
+            check(err);
+          }
+        }
+#endif
+
+
+        // ndm - call CUB
+
+        check(err);
+
+#ifdef COPY_OUT
+        for(KernelView* kernelView : views_){
+          View* view = kernelView->view();
+
+          //ndump(view->size());
+
+          if(kernelView->isWrite()){
+            err = cuMemcpyDtoH(view->hostPtr(), view->devPtr(),
+                               view->size());
+            check(err);
+          }
+        }
+#endif
+      }      
       
       bool ready(){
         return ready_;
@@ -739,6 +845,24 @@ namespace{
 
       auto kernel = 
       new Kernel(ptx, reduceSize, reduceFloat, reduceSigned, reduceSum);
+      
+      kernelMap_[kernelId] = kernel;
+      return false;
+    }
+
+    bool initKernel2(uint32_t kernelId,
+                    char* ptx,
+                    uint32_t reduceSize,
+                    bool reduceFloat,
+                    bool reduceSigned,
+                    bool reduceSum){ 
+      auto itr = kernelMap_.find(kernelId);
+      if(itr != kernelMap_.end()){
+        return true;
+      }
+
+      auto kernel = 
+      new Kernel(true, ptx, reduceSize, reduceFloat, reduceSigned, reduceSum);
       
       kernelMap_[kernelId] = kernel;
       return false;
@@ -838,6 +962,15 @@ namespace{
       kernel->run(n, reducePtr);
     }
 
+    void runKernel2(uint32_t kernelId, uint32_t n, void* reducePtr){ 
+      auto itr = kernelMap_.find(kernelId);
+      assert(itr != kernelMap_.end());
+
+      Kernel* kernel = itr->second;
+
+      kernel->run2(n, reducePtr);
+    }
+
   private:
     using ViewMap_ = map<void*, View*>;
     using KernelMap_ = unordered_map<uint32_t, Kernel*>;
@@ -890,6 +1023,18 @@ extern "C"{
                                    reduceFloat, reduceSigned, reduceSum);
   }
 
+  bool __ideas_cuda_init_kernel2(uint32_t kernelId,
+                                 char* ptx,
+                                 uint32_t reduceSize,
+                                 bool reduceFloat,
+                                 bool reduceSigned,
+                                 bool reduceSum){
+    _cudaRuntime.init();
+    return _cudaRuntime.initKernel2(kernelId, ptx, reduceSize,
+                                    reduceFloat, reduceSigned, reduceSum);
+  }
+
+
   void __ideas_cuda_add_view(uint32_t kernelId,
                              void** viewPtr,
                              uint32_t elementSize,
@@ -907,6 +1052,10 @@ extern "C"{
 
   void __ideas_cuda_run_kernel(uint32_t kernelId, uint32_t n, void* reducePtr){
     return _cudaRuntime.runKernel(kernelId, n, reducePtr);
+  }
+
+  void __ideas_cuda_run_kernel2(uint32_t kernelId, uint32_t n, void* reducePtr){
+    return _cudaRuntime.runKernel2(kernelId, n, reducePtr);
   }
 
   void __ideas_debug1(void* ptr){
