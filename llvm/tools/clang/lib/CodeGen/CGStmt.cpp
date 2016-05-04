@@ -96,6 +96,25 @@ public:
               break;
           }
         }
+      }
+      else if(const PointerType* pt = dyn_cast<PointerType>(ct.getTypePtr())){
+        (void)pt;
+
+        if(auto ne = dyn_cast<CXXNewExpr>(vd->getInit())){
+          if(ne->isArray()){
+            arrayVars_.insert(vd);
+            switch(opType_){
+              case OpType::LHS:
+                writeArrayVars_.insert(vd);
+                break;
+              case OpType::RHS:
+                readArrayVars_.insert(vd);
+                break;
+              default:
+                break;
+            }
+          }
+        }
       }      
     } 
   }
@@ -180,6 +199,18 @@ public:
     return writeViewVars_;
   }
 
+  const VarSet& arrayVars() const{
+    return arrayVars_;
+  }
+
+  const VarSet& readArrayVars() const{
+    return readArrayVars_;
+  }
+
+  const VarSet& writeArrayVars() const{
+    return writeArrayVars_;
+  }
+
   const auto& reduceOps(){
     return reduceOps_;
   }
@@ -193,6 +224,9 @@ private:
   VarSet viewVars_;
   VarSet readViewVars_;
   VarSet writeViewVars_;
+  VarSet arrayVars_;
+  VarSet readArrayVars_;
+  VarSet writeArrayVars_;
   OpType opType_ = OpType::None;
 };
 
@@ -427,10 +461,20 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
     const VarDecl* vd = ci.getCapturedVar();
 
     QualType ct = vd->getType().getCanonicalType();
+
     if(const RecordType* rt = dyn_cast<RecordType>(ct.getTypePtr())){
       (void)rt;
       if(ct.getAsString().find("class Kokkos::View") == 0){
         shouldCapture = false;
+      }
+    }
+    else if(const PointerType* pt = dyn_cast<PointerType>(ct.getTypePtr())){
+      (void)pt;
+
+      if(auto ne = dyn_cast<CXXNewExpr>(vd->getInit())){
+        if(ne->isArray()){
+          shouldCapture = false;
+        }
       }
     }
 
@@ -465,6 +509,10 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
   PTXParallelConstructVisitor::VarSet readViewVars;
   PTXParallelConstructVisitor::VarSet writeViewVars;
 
+  PTXParallelConstructVisitor::VarSet arrayVars;
+  PTXParallelConstructVisitor::VarSet readArrayVars;
+  PTXParallelConstructVisitor::VarSet writeArrayVars;
+
   ReduceType reduceType = ReduceType::None;
 
   if(parallelForStack_.empty()){
@@ -475,9 +523,14 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
 
     PTXParallelConstructVisitor ptxVisitor(reduceVar);
     ptxVisitor.VisitStmt(const_cast<CallExpr*>(E));
+
     viewVars = ptxVisitor.viewVars();
     readViewVars = ptxVisitor.readViewVars();
     writeViewVars = ptxVisitor.writeViewVars();
+
+    arrayVars = ptxVisitor.arrayVars();
+    readArrayVars = ptxVisitor.readArrayVars();
+    writeArrayVars = ptxVisitor.writeArrayVars();
 
     if(reduceVar){      
       for(auto op : ptxVisitor.reduceOps()){
@@ -576,6 +629,24 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
     viewInfoMap_[vd] = info;
   }
 
+  for(const VarDecl* vd : arrayVars){    
+    ArrayInfo info;
+
+    const PointerType* pt = dyn_cast<PointerType>(vd->getType());
+    assert(pt);
+
+    info.elementType = pt->getPointeeType();
+
+    auto ne = dyn_cast<CXXNewExpr>(vd->getInit());
+    assert(ne);
+    assert(ne->isArray());
+
+    info.size = EmitAnyExprToTemp(ne->getArraySize()).getScalarVal();
+    info.size = B.CreateTrunc(info.size, Int32Ty);
+
+    arrayInfoMap_[vd] = info;
+  }
+
   parallelForStack_.push_back(info);
 
   BasicBlock* startBlock = B.GetInsertBlock(); 
@@ -598,6 +669,14 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
     llvm::Type* t = ConvertType(viewInfoMap_[vd].elementType);
     params.push_back(llvm::PointerType::get(t, 0));
     params.push_back(llvm::PointerType::get(Int32Ty, 0));
+  }
+
+  for(const VarDecl* vd : arrayVars){
+    const PointerType* pt = dyn_cast<PointerType>(vd->getType());
+    assert(pt);
+
+    llvm::Type* t = ConvertType(pt->getPointeeType());
+    params.push_back(llvm::PointerType::get(t, 0));
   }
 
   for(const VarDecl* vd : captureVars){
@@ -650,6 +729,13 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
     aitr->setName(pn);
 
     parallelForParamDimMap_[vd] = aitr;
+    ++aitr;
+  }
+
+  auto aitrArray = aitr;
+
+  for(const VarDecl* vd : arrayVars){ 
+    aitr->setName(vd->getName());
     ++aitr;
   }
 
@@ -717,6 +803,12 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
   ReturnBlock = getJumpDestInCurrentScope("return");
 
   B.SetInsertPoint(entry);
+
+  for(const VarDecl* vd : arrayVars){
+    Value* varPtr = B.CreateAlloca(ConvertType(vd->getType()));
+    B.CreateStore(aitrArray++, ideasAddr(varPtr));
+    parallelForParamMap_[vd] = varPtr;
+  }
 
   for(const VarDecl* vd : captureVars){
     Value* varPtr = B.CreateAlloca(ConvertType(vd->getType()));
@@ -1305,6 +1397,36 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
     B.CreateCall(R.CudaAddViewFunc(), args);
   }
 
+  for(const VarDecl* vd : arrayVars){
+    ArrayInfo& info = arrayInfoMap_[vd];
+
+    llvm::Type* t = ConvertType(info.elementType);
+    uint32_t elementSize = t->getPrimitiveSizeInBits()/8;
+
+    Address addr = GetAddrOfLocalVar(vd);
+    assert(addr.isValid());
+
+    Value* ptr = B.CreateLoad(addr);
+
+    Value* arrayPtr = B.CreateBitCast(ptr, VoidPtrTy);
+    
+    uint32_t flags = 0;
+    
+    if(readArrayVars.find(vd) != readArrayVars.end()){
+      flags |= 0x01;
+    }
+    
+    if(writeArrayVars.find(vd) != writeArrayVars.end()){
+      flags |= 0x02;
+    }
+
+    ValueVec args = 
+      {kernelId, arrayPtr, ConstantInt::get(Int32Ty, elementSize), 
+       info.size, ConstantInt::get(Int32Ty, flags)};
+
+    B.CreateCall(R.CudaAddArrayFunc(), args);
+  }
+
   for(const VarDecl* vd : captureVars){
     auto itr = LocalDeclMap.find(vd);
     assert(itr != LocalDeclMap.end());
@@ -1312,6 +1434,10 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
     Value* varPtr = B.CreateBitCast(itr->second.getPointer(), VoidPtrTy);
 
     B.CreateCall(R.CudaAddVarFunc(), {kernelId, varPtr});  
+  }
+
+  for(const VarDecl* vd : arrayVars){
+    parallelForParamMap_.erase(vd);
   }
 
   B.CreateBr(readyBlock);
@@ -1345,6 +1471,9 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
 }
 
 void CodeGenFunction::EmitParallelConstructPTX2(const CallExpr* E){
+  assert(false);
+
+  /*
   using namespace llvm;
   using namespace std;
 
@@ -1935,7 +2064,8 @@ void CodeGenFunction::EmitParallelConstructPTX2(const CallExpr* E){
   //llvm::errs() << "---------------------- host module\n";
   //CGM.getModule().dump();
 
-  //ndump(ptx); 
+  //ndump(ptx);
+  */ 
 }
 
 // ===========================================

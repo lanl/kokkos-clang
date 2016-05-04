@@ -190,6 +190,12 @@ CGIdeasRuntime::CudaAddViewFunc(){
 }
 
 llvm::Function*
+CGIdeasRuntime::CudaAddArrayFunc(){
+  return GetFunc("__ideas_cuda_add_array",
+    {Int32Ty, VoidPtrTy, Int32Ty, Int32Ty, Int32Ty});
+}
+
+llvm::Function*
 CGIdeasRuntime::CudaAddVarFunc(){
   return GetFunc("__ideas_cuda_add_var", {Int32Ty, VoidPtrTy});
 }

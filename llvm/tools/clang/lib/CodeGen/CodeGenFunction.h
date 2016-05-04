@@ -1103,12 +1103,18 @@ private:
     size_t runtimeDims;
   };
 
+  struct ArrayInfo{
+    QualType elementType;
+    llvm::Value* size;
+  };
+
   // +===== ideas
   std::vector<ParallelForInfo*> parallelForStack_;
   uint32_t nextKernelId_ = 0;
   std::map<const VarDecl*, llvm::Value*> parallelForParamMap_; 
   std::map<const VarDecl*, llvm::Value*> parallelForParamDimMap_;
   std::map<const VarDecl*, ViewInfo> viewInfoMap_;
+  std::map<const VarDecl*, ArrayInfo> arrayInfoMap_;
   // ============
 
   /// CXXThisDecl - When generating code for a C++ member function,

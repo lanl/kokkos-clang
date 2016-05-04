@@ -17,8 +17,8 @@
 
 #include <cuda.h>
 
-//#define COPY_IN 1
-//#define COPY_OUT 1
+#define COPY_IN 1
+#define COPY_OUT 1
 
 using namespace std;
 //using namespace ideas;
@@ -489,6 +489,65 @@ namespace{
        uint32_t flags_;
     };
 
+    class Array{
+    public:
+      Array(void* hostPtr)
+      : hostPtr_(hostPtr){}
+
+      ~Array(){
+        CUresult err = cuMemFree(devPtr_);
+        check(err);
+      }
+
+      void setDevPtr(CUdeviceptr ptr){
+        devPtr_ = ptr;
+      }
+
+      void setSize(uint32_t size){
+        size_ = size;
+      }
+
+      CUdeviceptr& devPtr(){
+        return devPtr_;
+      }
+
+      void* hostPtr(){
+        return hostPtr_;
+      }
+
+      uint32_t size(){
+        return size_;
+      }
+
+    private:
+      void* hostPtr_;
+      CUdeviceptr devPtr_;
+      uint32_t size_;
+    };
+
+    class KernelArray{
+    public:
+      KernelArray(Array* array, uint32_t flags)
+      : array_(array),
+      flags_(flags){}
+
+      bool isRead(){
+        return flags_ & FIELD_READ;
+      }
+
+      bool isWrite(){
+        return flags_ & FIELD_WRITE;
+      }
+
+      Array* array(){
+        return array_;
+      }
+
+     private:
+       Array* array_; 
+       uint32_t flags_;
+    };
+
     class Kernel{
     public:
       Kernel(char* ptx,
@@ -559,6 +618,17 @@ namespace{
         views_.push_back(kernelView);
       }
 
+      void addArray(Array* array, uint32_t flags){
+        auto itr = arrayMap_.find(array);
+        if(itr != arrayMap_.end()){
+          return;
+        }
+
+        auto kernelArray = new KernelArray(array, flags);
+        arrayMap_[array] = kernelArray;
+        arrays_.push_back(kernelArray);
+      }
+
       void addVar(void* varPtr, size_t size){
         (void)size;
         vars_.push_back(varPtr);
@@ -615,6 +685,12 @@ namespace{
             kernelParams_.push_back(&view->dimsPtr());
           }
 
+          for(KernelArray* kernelArray : arrays_){
+            Array* array = kernelArray->array();
+
+            kernelParams_.push_back(&array->devPtr());
+          }
+
           for(void* varPtr : vars_){
             kernelParams_.push_back(varPtr);
           }
@@ -647,8 +723,17 @@ namespace{
             check(err);
           }
         }
-#endif
 
+        for(KernelArray* kernelArray : arrays_){
+          Array* array = kernelArray->array();
+
+          if(kernelArray->isRead()){
+            err = cuMemcpyHtoD(array->devPtr(), array->hostPtr(),
+                               array->size());
+            check(err);
+          }
+        }
+#endif
 
         //CUstream stream;
         //cuStreamCreate(&stream, 0);
@@ -678,6 +763,16 @@ namespace{
             check(err);
           }
         }
+
+        for(KernelArray* kernelArray : arrays_){
+          Array* array = kernelArray->array();
+
+          if(kernelArray->isWrite()){
+            err = cuMemcpyDtoH(array->hostPtr(), array->devPtr(),
+                               array->size());
+            check(err);
+          }
+        }
 #endif
 
         if(reduceRetPtr){
@@ -686,9 +781,12 @@ namespace{
           reduce(hostPtr_, reducePtr_, gridDimX, reduceSize_, reduceFloat_,
                  reduceSigned_, reduceSum_, reduceRetPtr);
         }
+
       }
 
       void run2(uint32_t n, void* reduceRetPtr){
+        assert(false);
+#if 0
         n_ = n;
         size_t gridDimX;
 
@@ -768,6 +866,7 @@ namespace{
           }
         }
 #endif
+#endif
       }      
       
       bool ready(){
@@ -777,8 +876,10 @@ namespace{
     private:
       using KernelParams_ = vector<void*>;
       using ViewVec_ = vector<KernelView*>;
+      using ArrayVec_ = vector<KernelArray*>;
       using VarVec_ = vector<void*>;      
       using ViewMap_ = unordered_map<View*, KernelView*>;
+      using ArrayMap_ = unordered_map<Array*, KernelArray*>;
 
       CUmodule module_;    
       CUfunction function_;
@@ -793,8 +894,10 @@ namespace{
       size_t numThreads_;
       KernelParams_ kernelParams_;
       ViewVec_ views_;
+      ArrayVec_ arrays_;
       VarVec_ vars_;
       ViewMap_ viewMap_;
+      ArrayMap_ arrayMap_;
       uint32_t n_;
       uint32_t lastSize_;  
     };
@@ -927,6 +1030,42 @@ namespace{
       kernel->addView(view, flags);
     }
 
+    void addArray(uint32_t kernelId,
+                 void* arrayPtr,
+                 uint32_t elementSize,
+                 uint32_t size,
+                 uint32_t flags){
+      
+      auto itr = arrayMap_.find(arrayPtr);
+      
+      Array* array;
+
+      if(itr != arrayMap_.end()){
+        array = itr->second;
+      }
+      else{
+        array = new Array(arrayPtr);
+
+        size_t bytes = elementSize * size;
+
+        CUdeviceptr devPtr;
+        CUresult err = cuMemAlloc(&devPtr, bytes);
+        check(err);
+
+        array->setDevPtr(devPtr);
+        array->setSize(bytes);
+
+        arrayMap_[arrayPtr] = array;
+      }
+
+      auto kitr = kernelMap_.find(kernelId);
+      assert(kitr != kernelMap_.end());
+
+      Kernel* kernel = kitr->second;
+
+      kernel->addArray(array, flags);
+    }
+
     void addVar(uint32_t kernelId, void* varPtr, size_t size){
       auto kitr = kernelMap_.find(kernelId);
       assert(kitr != kernelMap_.end());
@@ -973,6 +1112,7 @@ namespace{
 
   private:
     using ViewMap_ = map<void*, View*>;
+    using ArrayMap_ = map<void*, Array*>;
     using KernelMap_ = unordered_map<uint32_t, Kernel*>;
 
     bool initalized_ = false;
@@ -982,6 +1122,7 @@ namespace{
     size_t numThreads_;
 
     ViewMap_ viewMap_;
+    ArrayMap_ arrayMap_;
     KernelMap_ kernelMap_;
   };
 
@@ -1044,6 +1185,14 @@ extern "C"{
                              uint32_t flags){
     _cudaRuntime.addView(kernelId, viewPtr, elementSize,
       staticDims, staticSizes, runtimeDims, flags);
+  }
+
+  void __ideas_cuda_add_array(uint32_t kernelId,
+                              void* arrayPtr,
+                              uint32_t elementSize,
+                              uint32_t size,
+                              uint32_t flags){
+    _cudaRuntime.addArray(kernelId, arrayPtr, elementSize, size, flags);
   }
 
   void __ideas_cuda_add_var(uint32_t kernelId, void* varPtr){

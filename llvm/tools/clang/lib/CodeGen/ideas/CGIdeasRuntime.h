@@ -105,6 +105,7 @@ namespace CodeGen {
     llvm::Function* CudaInitKernelFunc();
     llvm::Function* CudaInitKernel2Func();
     llvm::Function* CudaAddViewFunc();
+    llvm::Function* CudaAddArrayFunc();
     llvm::Function* CudaAddVarFunc();
     llvm::Function* CudaRunKernelFunc();
     llvm::Function* CudaRunKernel2Func();
