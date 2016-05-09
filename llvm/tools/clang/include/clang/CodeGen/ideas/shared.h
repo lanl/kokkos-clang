@@ -52,34 +52,36 @@
  * ##### 
  */
 
-#include "clang/CodeGen/ideas/ASTVisitors.h"
+#ifndef LLVM_CLANG_LIB_CODEGEN_IDEAS_SHARED_H
+#define LLVM_CLANG_LIB_CODEGEN_IDEAS_SHARED_H
 
-using namespace clang;
-using namespace CodeGen;
+#include "clang/AST/CharUnits.h"
+#include "clang/AST/Decl.h"
+#include "clang/AST/Stmt.h"
+#include "clang/AST/ExprCXX.h"
+#include "clang/AST/ExprObjC.h"
+#include "clang/AST/Type.h"
+#include "clang/AST/DeclVisitor.h"
+#include "clang/AST/StmtVisitor.h"
+#include "llvm/IR/ValueHandle.h"
+ 
+namespace clang{
+namespace CodeGen{
+    
+  enum ParallelForKind{
+    PFK_Serial,
+    PFK_Threads,
+    PFK_CUDA
+  };
+   
+  class ParallelForInfo{
+  public:
+    llvm::Value* arg;
+    CallExpr* callExpr;
+    std::vector<ParallelForInfo*> children;
+  };
 
-void ParallelForVisitor::VisitStmt(Stmt* S){
-  bool shouldPop = false;
-  
-  if(CallExpr* ce = dyn_cast<CallExpr>(S)){
-    const FunctionDecl* f = ce->getDirectCallee();
-    if(f && (f->getQualifiedNameAsString() == "Kokkos::parallel_for" ||
-             f->getQualifiedNameAsString() == "Kokkos::parallel_reduce")){
-      ParallelForInfo* info = new ParallelForInfo;
-      info->callExpr = ce;
-      
-      if(!stack_.empty()){
-        ParallelForInfo* aboveInfo = stack_.back();
-        aboveInfo->children.push_back(info);
-        shouldPop = true;
-      }
-      
-      stack_.push_back(info);
-    }
-  }
-  
-  VisitChildren(S);
-  
-  if(shouldPop){
-    stack_.pop_back();
-  } 
-}
+} // end namespace CodeGen
+} // end namespace clang
+
+#endif // LLVM_CLANG_LIB_CODEGEN_IDEAS_SHARED_H

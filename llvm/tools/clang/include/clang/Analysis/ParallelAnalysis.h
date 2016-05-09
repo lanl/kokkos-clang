@@ -52,34 +52,61 @@
  * ##### 
  */
 
+#include "clang/Analysis/CFG.h"
+
+#include <unordered_set>
+
+#include <iostream>
+
 #include "clang/CodeGen/ideas/ASTVisitors.h"
 
-using namespace clang;
-using namespace CodeGen;
+namespace clang{
 
-void ParallelForVisitor::VisitStmt(Stmt* S){
-  bool shouldPop = false;
-  
-  if(CallExpr* ce = dyn_cast<CallExpr>(S)){
-    const FunctionDecl* f = ce->getDirectCallee();
-    if(f && (f->getQualifiedNameAsString() == "Kokkos::parallel_for" ||
-             f->getQualifiedNameAsString() == "Kokkos::parallel_reduce")){
-      ParallelForInfo* info = new ParallelForInfo;
-      info->callExpr = ce;
+  class ParallelAnalysis{
+  public:
+    typedef std::unordered_set<CFGBlock*> BlockSet;
+    
+    static void Run(Sema& S, FunctionDecl* fd){
+      std::unique_ptr<CFG> cfg =
+      CFG::buildCFG(fd, fd->getBody(), &S.Context, CFG::BuildOptions());
+
+      BlockSet vs;
+      Visit(cfg.get(), vs, cfg->getEntry());
+    }
+    
+    static void Visit(CFG* cfg,
+                      BlockSet& vs,
+                      CFGBlock& block){
       
-      if(!stack_.empty()){
-        ParallelForInfo* aboveInfo = stack_.back();
-        aboveInfo->children.push_back(info);
-        shouldPop = true;
+      vs.insert(&block);
+      
+      for(auto itr = block.begin(), itrEnd = block.end();
+          itr != itrEnd; ++itr){
+        
+        auto o = itr->getAs<CFGStmt>();
+        if(!o.hasValue()){
+          continue;
+        }
+
+        const Stmt* stmt = o.getValue().getStmt();
+        CodeGen::PTXParallelConstructVisitor visitor(nullptr);
+        visitor.VisitStmt(const_cast<Stmt*>(stmt));
       }
       
-      stack_.push_back(info);
+      bool found = false;
+      
+      for(auto itr = block.succ_begin(), itrEnd = block.succ_end();
+          itr != itrEnd; ++itr){
+        CFGBlock::AdjacentBlock b = *itr;
+        
+        CFGBlock* block = b.getReachableBlock();
+        
+        if(block && vs.find(block) == vs.end()){
+          Visit(cfg, vs, *block);
+          found = true;
+        }
+      }
     }
-  }
+  };
   
-  VisitChildren(S);
-  
-  if(shouldPop){
-    stack_.pop_back();
-  } 
-}
+} // end namespace clang

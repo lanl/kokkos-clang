@@ -42,6 +42,8 @@
 #include <iostream>
 #include <unordered_set>
 
+#include "clang/CodeGen/ideas/shared.h"
+
 #define ndump(X) llvm::errs() << __FILE__ << ":" << __LINE__ << ": " << \
 __PRETTY_FUNCTION__ << ": " << #X << " = " << X << "\n"
 
@@ -110,23 +112,6 @@ enum TypeEvaluationKind {
   TEK_Complex,
   TEK_Aggregate
 };
-
-// +===== ideas ==============================
-  
-enum ParallelForKind{
-  PFK_Serial,
-  PFK_Threads,
-  PFK_CUDA
-};
- 
-class ParallelForInfo{
-public:
-  llvm::Value* arg;
-  CallExpr* callExpr;
-  std::vector<ParallelForInfo*> children;
-};
-
-// ===========================================
   
 /// CodeGenFunction - This class organizes the per-function state that is used
 /// while generating LLVM code.
