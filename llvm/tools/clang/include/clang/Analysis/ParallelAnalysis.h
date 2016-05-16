@@ -55,6 +55,7 @@
 #include "clang/Analysis/CFG.h"
 
 #include <unordered_set>
+#include <unordered_map>
 
 #include <iostream>
 
@@ -64,22 +65,38 @@ namespace clang{
 
   class ParallelAnalysis{
   public:
+    using VarSet = std::set<const VarDecl*>;
+
+    using DataMap = std::unordered_map<const Stmt*, VarSet>;
+
+    struct Data{
+      VarSet readViewVars;
+      VarSet writeViewVars;
+      VarSet readArrayVars;
+      VarSet writeArrayVars;
+    };
+
     typedef std::unordered_set<CFGBlock*> BlockSet;
     
-    static void Run(Sema& S, FunctionDecl* fd){
+    void Run(Sema& S, FunctionDecl* fd){
       std::unique_ptr<CFG> cfg =
       CFG::buildCFG(fd, fd->getBody(), &S.Context, CFG::BuildOptions());
 
       BlockSet vs;
-      Visit(cfg.get(), vs, cfg->getEntry());
+      Data data;
+      Visit(cfg.get(), nullptr, vs, data, cfg->getEntry());
     }
-    
-    static void Visit(CFG* cfg,
-                      BlockSet& vs,
-                      CFGBlock& block){
+                      
+    void Visit(CFG* cfg,
+               const Stmt* prevStmt,
+               BlockSet& vs,
+               Data& data,
+               CFGBlock& block){
       
       vs.insert(&block);
-      
+
+      const Stmt* lastStmt;
+
       for(auto itr = block.begin(), itrEnd = block.end();
           itr != itrEnd; ++itr){
         
@@ -88,25 +105,120 @@ namespace clang{
           continue;
         }
 
-        const Stmt* stmt = o.getValue().getStmt();
+        lastStmt = o.getValue().getStmt();
+
         CodeGen::PTXParallelConstructVisitor visitor(nullptr);
-        visitor.VisitStmt(const_cast<Stmt*>(stmt));
-      }
-      
-      bool found = false;
-      
-      for(auto itr = block.succ_begin(), itrEnd = block.succ_end();
-          itr != itrEnd; ++itr){
-        CFGBlock::AdjacentBlock b = *itr;
+
+        bool isParallelConstruct = false;
+
+        if(const CallExpr* ce = dyn_cast<CallExpr>(lastStmt)){
+
+          const FunctionDecl* f = ce->getDirectCallee();
+
+          if(f && (f->getQualifiedNameAsString() == "Kokkos::parallel_for" ||
+                   f->getQualifiedNameAsString() == "Kokkos::parallel_reduce")){
+            
+            isParallelConstruct = true;
+
+            visitor.VisitStmt(const_cast<Stmt*>(lastStmt));
+            
+            VarSet remove;
+
+            for(auto vd : data.writeViewVars){
+              if(visitor.readViewVars().find(vd) != visitor.readViewVars().end()){
+                addVar(toDeviceViews_, lastStmt, vd);
+                remove.insert(vd);
+              }
+            }
+
+            data.writeViewVars.erase(remove.begin(), remove.end());
+
+            remove.clear();
+
+            for(auto vd : data.writeArrayVars){
+              if(visitor.readArrayVars().find(vd) !=
+                 visitor.readArrayVars().end()){
+                addVar(toDeviceArrays_, lastStmt, vd);
+                remove.insert(vd);
+              }
+            }
+
+            data.writeArrayVars.erase(remove.begin(), remove.end());
+
+            data.readViewVars.insert(visitor.writeViewVars().begin(),
+              visitor.writeViewVars().end());
+
+            data.readArrayVars.insert(visitor.writeArrayVars().begin(),
+              visitor.writeArrayVars().end());
+          }
+        }
+
+        if(!isParallelConstruct){
+          visitor.VisitStmt(const_cast<Stmt*>(lastStmt));
+          
+          data.writeViewVars.insert(visitor.writeViewVars().begin(),
+            visitor.writeViewVars().end());
+
+          data.writeArrayVars.insert(visitor.writeArrayVars().begin(),
+            visitor.writeArrayVars().end());
+
+          VarSet remove;
+
+          for(auto vd : visitor.readViewVars()){
+            if(data.readViewVars.find(vd) != data.readViewVars.end()){
+              addVar(fromDeviceViews_, lastStmt, vd);
+              remove.insert(vd);
+            }
+          }
+
+          data.readViewVars.erase(remove.begin(), remove.end());
+
+          remove.clear();
+
+          for(auto vd : visitor.readArrayVars()){
+            if(data.readArrayVars.find(vd) != data.readArrayVars.end()){
+              addVar(fromDeviceArrays_, lastStmt, vd);
+              remove.insert(vd);
+            }
+          }
+
+          data.readArrayVars.erase(remove.begin(), remove.end());
+        }
+
+        bool found = false;
         
-        CFGBlock* block = b.getReachableBlock();
-        
-        if(block && vs.find(block) == vs.end()){
-          Visit(cfg, vs, *block);
-          found = true;
+        for(auto itr = block.succ_begin(), itrEnd = block.succ_end();
+            itr != itrEnd; ++itr){
+          CFGBlock::AdjacentBlock b = *itr;
+          
+          CFGBlock* block = b.getReachableBlock();
+          
+          if(block && vs.find(block) == vs.end()){
+            Visit(cfg, lastStmt, vs, data, *block);
+            found = true;
+          }
         }
       }
     }
+
+    void addVar(DataMap& m, const Stmt* s, const VarDecl* vd){
+      auto itr = m.find(s);
+      
+      if(itr != m.end()){
+        itr->second.insert(vd);
+        return;  
+      }
+
+      VarSet vs;
+      vs.insert(vd);
+      m.emplace(s, std::move(vs));
+    }
+
+  private:
+    DataMap toDeviceViews_;
+    DataMap fromDeviceViews_;
+    DataMap toDeviceArrays_;
+    DataMap fromDeviceArrays_;
   };
   
 } // end namespace clang

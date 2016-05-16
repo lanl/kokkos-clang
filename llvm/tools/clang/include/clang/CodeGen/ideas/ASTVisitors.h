@@ -52,6 +52,8 @@
  * ##### 
  */
 
+// +===== ideas ============================================
+
 #ifndef LLVM_CLANG_LIB_CODEGEN_IDEAS_AST_VISITORS_H
 #define LLVM_CLANG_LIB_CODEGEN_IDEAS_AST_VISITORS_H
 
@@ -138,7 +140,12 @@ public:
       else if(const PointerType* pt = dyn_cast<PointerType>(ct.getTypePtr())){
         (void)pt;
 
-        if(auto ne = dyn_cast<CXXNewExpr>(vd->getInit())){
+        const Expr* init = vd->getInit();
+        if(!init){
+          return;
+        }
+
+        if(auto ne = dyn_cast<CXXNewExpr>(init)){
           if(ne->isArray()){
             arrayVars_.insert(vd);
             switch(opType_){
