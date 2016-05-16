@@ -53,12 +53,26 @@
  */
 
 #include "clang/Analysis/CFG.h"
+#include "clang/AST/ASTConsumer.h"
+#include "clang/AST/ASTContext.h"
+#include "clang/AST/ExternalASTSource.h"
+#include "clang/AST/Stmt.h"
+#include "clang/Parse/ParseDiagnostic.h"
+#include "clang/Parse/Parser.h"
+#include "clang/Sema/CodeCompleteConsumer.h"
+#include "clang/Sema/ExternalSemaSource.h"
+#include "clang/Sema/Sema.h"
+#include "clang/Sema/SemaConsumer.h"
+#include "llvm/Support/CrashRecoveryContext.h"
+#include <cstdio>
+#include <memory>
 
 #include <unordered_set>
 #include <unordered_map>
 
 #include <iostream>
 
+#include "clang/CodeGen/ideas/ASTVisitors.h"
 #include "clang/CodeGen/ideas/ASTVisitors.h"
 
 namespace clang{
@@ -214,11 +228,27 @@ namespace clang{
       m.emplace(s, std::move(vs));
     }
 
+    static DataMap& toDeviceViews(){
+      return toDeviceViews_;
+    }
+
+    static DataMap& fromDeviceViews(){
+      return fromDeviceViews_;
+    }
+
+    static DataMap& toDeviceArrays(){
+      return toDeviceArrays_;
+    }
+
+    static DataMap& fromDeviceArrays(){
+      return fromDeviceArrays_;
+    }
+
   private:
-    DataMap toDeviceViews_;
-    DataMap fromDeviceViews_;
-    DataMap toDeviceArrays_;
-    DataMap fromDeviceArrays_;
+    static DataMap toDeviceViews_;
+    static DataMap fromDeviceViews_;
+    static DataMap toDeviceArrays_;
+    static DataMap fromDeviceArrays_;
   };
   
 } // end namespace clang
