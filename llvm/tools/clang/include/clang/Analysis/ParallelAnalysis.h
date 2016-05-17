@@ -188,7 +188,9 @@ namespace clang{
             }
           }
 
-          data.readViewVars.erase(remove.begin(), remove.end());
+          for(auto vd : remove){
+            data.readViewVars.erase(vd);
+          }
 
           remove.clear();
 
@@ -199,7 +201,9 @@ namespace clang{
             }
           }
 
-          data.readArrayVars.erase(remove.begin(), remove.end());
+          for(auto vd : remove){
+            data.readArrayVars.erase(vd);
+          }
         }
       }
 

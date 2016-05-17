@@ -119,7 +119,6 @@ public:
     VisitChildren(E);
   }
   
-  /*
   void VisitDeclStmt(DeclStmt* S){
     const VarDecl* vd = dyn_cast_or_null<const VarDecl>(S->getSingleDecl());
     if(!vd){
@@ -131,7 +130,6 @@ public:
     Visit(const_cast<Expr*>(vd->getInit()));
     opType_ = OpType::None;
   }
-  */
 
   void VisitBinaryOperator(BinaryOperator* S){
     switch(S->getOpcode()){

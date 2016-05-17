@@ -1925,7 +1925,18 @@ void CodeGenFunction::EmitStmt(const Stmt *S) {
   if(isMainStmt(S)){
     auto itr = ParallelAnalysis::fromDeviceViews().find(S);
     if(itr != ParallelAnalysis::fromDeviceViews().end()){
-      //S->dump();
+      for(const VarDecl* vd : itr->second){
+        // output copy view from device runtime calls before stmt
+        //vd->dump();
+      }
+    }
+
+    itr = ParallelAnalysis::fromDeviceArrays().find(S);
+    if(itr != ParallelAnalysis::fromDeviceArrays().end()){
+      for(const VarDecl* vd : itr->second){
+        // output copy view from device runtime calls before stmt
+        //vd->dump();
+      }
     }
   }
   // ===========================================
@@ -2134,6 +2145,26 @@ void CodeGenFunction::EmitStmt(const Stmt *S) {
     EmitOMPTargetDataDirective(cast<OMPTargetDataDirective>(*S));
     break;
   }
+
+  // +====== ideas =============================
+  if(isMainStmt(S)){
+    auto itr = ParallelAnalysis::toDeviceViews().find(S);
+    if(itr != ParallelAnalysis::toDeviceViews().end()){
+      for(const VarDecl* vd : itr->second){
+        // output copy view to device runtime calls after stmt
+        //vd->dump();
+      }
+    }
+
+    itr = ParallelAnalysis::toDeviceArrays().find(S);
+    if(itr != ParallelAnalysis::toDeviceArrays().end()){
+      for(const VarDecl* vd : itr->second){
+        // output copy view to device runtime calls after stmt
+        //vd->dump();
+      }
+    }
+  }
+  // ===========================================
 }
 
 bool CodeGenFunction::EmitSimpleStmt(const Stmt *S) {
