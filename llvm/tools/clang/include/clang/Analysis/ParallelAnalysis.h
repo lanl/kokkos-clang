@@ -75,6 +75,9 @@
 #include "clang/CodeGen/ideas/ASTVisitors.h"
 #include "clang/CodeGen/ideas/ASTVisitors.h"
 
+ #define ndump(X) llvm::errs() << __FILE__ << ":" << __LINE__ << ": " << \
+ __PRETTY_FUNCTION__ << ": " << #X << " = " << X << "\n"
+
 namespace clang{
 
   class ParallelAnalysis{
@@ -92,7 +95,7 @@ namespace clang{
 
     typedef std::unordered_set<CFGBlock*> BlockSet;
     
-    void Run(Sema& S, FunctionDecl* fd){
+    static void Run(Sema& S, FunctionDecl* fd){
       std::unique_ptr<CFG> cfg =
       CFG::buildCFG(fd, fd->getBody(), &S.Context, CFG::BuildOptions());
 
@@ -101,12 +104,12 @@ namespace clang{
       Visit(cfg.get(), nullptr, vs, data, cfg->getEntry());
     }
                       
-    void Visit(CFG* cfg,
-               const Stmt* prevStmt,
-               BlockSet& vs,
-               Data& data,
-               CFGBlock& block){
-      
+    static void Visit(CFG* cfg,
+                      const Stmt* prevStmt,
+                      BlockSet& vs,
+                      Data& data,
+                      CFGBlock& block){
+
       vs.insert(&block);
 
       const Stmt* lastStmt;
@@ -131,10 +134,10 @@ namespace clang{
 
           if(f && (f->getQualifiedNameAsString() == "Kokkos::parallel_for" ||
                    f->getQualifiedNameAsString() == "Kokkos::parallel_reduce")){
-            
+
             isParallelConstruct = true;
 
-            visitor.VisitStmt(const_cast<Stmt*>(lastStmt));
+            visitor.Visit(const_cast<Stmt*>(lastStmt));
             
             VarSet remove;
 
@@ -168,7 +171,7 @@ namespace clang{
         }
 
         if(!isParallelConstruct){
-          visitor.VisitStmt(const_cast<Stmt*>(lastStmt));
+          visitor.Visit(const_cast<Stmt*>(lastStmt));
           
           data.writeViewVars.insert(visitor.writeViewVars().begin(),
             visitor.writeViewVars().end());
@@ -198,24 +201,24 @@ namespace clang{
 
           data.readArrayVars.erase(remove.begin(), remove.end());
         }
+      }
 
-        bool found = false;
+      bool found = false;
+      
+      for(auto itr = block.succ_begin(), itrEnd = block.succ_end();
+          itr != itrEnd; ++itr){
+        CFGBlock::AdjacentBlock b = *itr;
         
-        for(auto itr = block.succ_begin(), itrEnd = block.succ_end();
-            itr != itrEnd; ++itr){
-          CFGBlock::AdjacentBlock b = *itr;
-          
-          CFGBlock* block = b.getReachableBlock();
-          
-          if(block && vs.find(block) == vs.end()){
-            Visit(cfg, lastStmt, vs, data, *block);
-            found = true;
-          }
+        CFGBlock* block = b.getReachableBlock();
+        
+        if(block && vs.find(block) == vs.end()){
+          Visit(cfg, lastStmt, vs, data, *block);
+          found = true;
         }
       }
     }
 
-    void addVar(DataMap& m, const Stmt* s, const VarDecl* vd){
+    static void addVar(DataMap& m, const Stmt* s, const VarDecl* vd){
       auto itr = m.find(s);
       
       if(itr != m.end()){

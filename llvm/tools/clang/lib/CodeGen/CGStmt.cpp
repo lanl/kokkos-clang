@@ -44,6 +44,7 @@
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Vectorize.h"
+#include "clang/Analysis/ParallelAnalysis.h"
 
 #include <unordered_set>
 
@@ -349,12 +350,12 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
 
   if(parallelForStack_.empty()){
     ParallelForVisitor visitor;
-    visitor.VisitStmt(const_cast<CallExpr*>(E));
+    visitor.Visit(const_cast<CallExpr*>(E));
     parent = nullptr;
     info = visitor.getParallelForInfo();
 
     PTXParallelConstructVisitor ptxVisitor(reduceVar);
-    ptxVisitor.VisitStmt(const_cast<CallExpr*>(E));
+    ptxVisitor.Visit(const_cast<CallExpr*>(E));
 
     viewVars = ptxVisitor.viewVars();
     readViewVars = ptxVisitor.readViewVars();
@@ -1919,6 +1920,15 @@ void CodeGenFunction::EmitStopPoint(const Stmt *S) {
 void CodeGenFunction::EmitStmt(const Stmt *S) {
   assert(S && "Null statement?");
   PGO.setCurrentStmt(S);
+
+  // +====== ideas =============================
+  if(isMainStmt(S)){
+    auto itr = ParallelAnalysis::fromDeviceViews().find(S);
+    if(itr != ParallelAnalysis::fromDeviceViews().end()){
+      //S->dump();
+    }
+  }
+  // ===========================================
 
   // These statements have their own debug info handling.
   if (EmitSimpleStmt(S))

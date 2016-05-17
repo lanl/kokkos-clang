@@ -164,8 +164,7 @@ void clang::ParseAST(Sema &S, bool PrintStats, bool SkipFunctionBodies) {
         if(d){
           FunctionDecl* fd = dyn_cast<FunctionDecl>(d);
           if(fd && fd->hasBody() && S.SourceMgr.isInMainFile(fd->getLocStart())){
-            ParallelAnalysis pa;
-            pa.Run(S, fd);
+            ParallelAnalysis::Run(S, fd);
           }
         }
       }
