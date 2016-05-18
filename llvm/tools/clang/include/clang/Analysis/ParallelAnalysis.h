@@ -142,13 +142,15 @@ namespace clang{
             VarSet remove;
 
             for(auto vd : data.writeViewVars){
-              if(visitor.readViewVars().find(vd) != visitor.readViewVars().end()){
+              if(visitor.readViewVars().find(vd) != visitor.readViewVars().end()){                
                 addVar(toDeviceViews_, lastStmt, vd);
                 remove.insert(vd);
               }
             }
 
-            data.writeViewVars.erase(remove.begin(), remove.end());
+            for(auto vd : remove){
+              data.writeViewVars.erase(vd);
+            }
 
             remove.clear();
 
@@ -160,7 +162,9 @@ namespace clang{
               }
             }
 
-            data.writeArrayVars.erase(remove.begin(), remove.end());
+            for(auto vd : remove){
+              data.writeArrayVars.erase(vd);
+            }
 
             data.readViewVars.insert(visitor.writeViewVars().begin(),
               visitor.writeViewVars().end());
