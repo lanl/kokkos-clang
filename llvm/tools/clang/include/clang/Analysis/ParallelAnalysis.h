@@ -112,7 +112,7 @@ namespace clang{
 
       vs.insert(&block);
 
-      const Stmt* lastStmt;
+      const Stmt* lastStmt = prevStmt;
 
       for(auto itr = block.begin(), itrEnd = block.end();
           itr != itrEnd; ++itr){
@@ -122,13 +122,13 @@ namespace clang{
           continue;
         }
 
-        lastStmt = o.getValue().getStmt();
+        const Stmt* stmt = o.getValue().getStmt();
 
         CodeGen::PTXParallelConstructVisitor visitor(nullptr);
 
         bool isParallelConstruct = false;
 
-        if(const CallExpr* ce = dyn_cast<CallExpr>(lastStmt)){
+        if(const CallExpr* ce = dyn_cast<CallExpr>(stmt)){
 
           const FunctionDecl* f = ce->getDirectCallee();
 
@@ -137,7 +137,7 @@ namespace clang{
 
             isParallelConstruct = true;
 
-            visitor.Visit(const_cast<Stmt*>(lastStmt));
+            visitor.Visit(const_cast<Stmt*>(stmt));
             
             VarSet remove;
 
@@ -175,7 +175,10 @@ namespace clang{
         }
 
         if(!isParallelConstruct){
-          visitor.Visit(const_cast<Stmt*>(lastStmt));
+          visitor.Visit(const_cast<Stmt*>(stmt));
+
+          bool found = !(visitor.writeViewVars().empty() &&
+            visitor.writeArrayVars().empty());
           
           data.writeViewVars.insert(visitor.writeViewVars().begin(),
             visitor.writeViewVars().end());
@@ -186,8 +189,9 @@ namespace clang{
           VarSet remove;
 
           for(auto vd : visitor.readViewVars()){
+            found = true;
             if(data.readViewVars.find(vd) != data.readViewVars.end()){
-              addVar(fromDeviceViews_, lastStmt, vd);
+              addVar(fromDeviceViews_, stmt, vd);
               remove.insert(vd);
             }
           }
@@ -199,14 +203,19 @@ namespace clang{
           remove.clear();
 
           for(auto vd : visitor.readArrayVars()){
+            found = true;
             if(data.readArrayVars.find(vd) != data.readArrayVars.end()){
-              addVar(fromDeviceArrays_, lastStmt, vd);
+              addVar(fromDeviceArrays_, stmt, vd);
               remove.insert(vd);
             }
           }
 
           for(auto vd : remove){
             data.readArrayVars.erase(vd);
+          }
+
+          if(found){
+            lastStmt = stmt;
           }
         }
       }
