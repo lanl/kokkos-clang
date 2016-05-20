@@ -53,7 +53,8 @@ public:
   enum class OpType{
     None,
     LHS,
-    RHS
+    RHS,
+    RW
   };
 
   using VarSet = std::set<const VarDecl*>;
@@ -77,6 +78,10 @@ public:
             case OpType::RHS:
               readViewVars_.insert(vd);
               break;
+            case OpType::RW:
+              writeViewVars_.insert(vd);
+              readViewVars_.insert(vd);
+              break;
             default:
               break;
           }
@@ -93,6 +98,10 @@ public:
                 writeArrayVars_.insert(vd);
                 break;
               case OpType::RHS:
+                readArrayVars_.insert(vd);
+                break;
+              case OpType::RW:
+                writeArrayVars_.insert(vd);
                 readArrayVars_.insert(vd);
                 break;
               default:
@@ -140,6 +149,8 @@ public:
   void VisitBinaryOperator(BinaryOperator* S){
     switch(S->getOpcode()){
     case BO_Assign:
+      opType_ = OpType::LHS;
+      break;
     case BO_MulAssign:
     case BO_DivAssign:
     case BO_RemAssign:
@@ -150,7 +161,7 @@ public:
     case BO_AndAssign:
     case BO_XorAssign:
     case BO_OrAssign:
-      opType_ = OpType::LHS;
+      opType_ = OpType::RW;
       break;
     default:
       opType_ = OpType::RHS;

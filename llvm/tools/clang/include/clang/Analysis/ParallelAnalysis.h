@@ -179,7 +179,7 @@ namespace clang{
 
           bool found = !(visitor.writeViewVars().empty() &&
             visitor.writeArrayVars().empty());
-          
+
           data.writeViewVars.insert(visitor.writeViewVars().begin(),
             visitor.writeViewVars().end());
 
