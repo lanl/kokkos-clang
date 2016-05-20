@@ -106,7 +106,13 @@ namespace CodeGen {
     llvm::Function* CudaInitKernel2Func();
     llvm::Function* CudaAddViewFunc();
     llvm::Function* CudaAddArrayFunc();
-    llvm::Function* CudaAddVarFunc();
+    llvm::Function* CudaAddKernelViewFunc();
+    llvm::Function* CudaAddKernelArrayFunc();
+    llvm::Function* CudaCopyViewToDeviceFunc();
+    llvm::Function* CudaCopyViewFromDeviceFunc();
+    llvm::Function* CudaCopyArrayToDeviceFunc();
+    llvm::Function* CudaCopyArrayFromDeviceFunc();
+    llvm::Function* CudaAddKernelVarFunc();
     llvm::Function* CudaRunKernelFunc();
     llvm::Function* CudaRunKernel2Func();
 

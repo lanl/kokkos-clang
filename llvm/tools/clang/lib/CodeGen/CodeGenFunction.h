@@ -138,7 +138,19 @@ public:
   Address ideasAddr(llvm::Value* v){
     return Address(v, getPointerAlign());
   }
+
+  llvm::Value* GetOrCreateKokkosView(const VarDecl* VD);
   
+  llvm::Value* GetOrCreateKokkosArray(const VarDecl* VD);
+
+  void CreateKokkosViewTypeInfo(const VarDecl* VD);
+
+  void CreateKokkosArrayTypeInfo(const VarDecl* VD);
+
+  void CopyKokkosDataToDevice(const Stmt* S);
+
+  void CopyKokkosDataFromDevice(const Stmt* S);
+
   // +==============================================
   
   /// A jump destination is an abstract label, branching to which may
@@ -1083,12 +1095,14 @@ public:
 private:
 
   struct ViewInfo{
+    bool created = false;
     QualType elementType;
     std::vector<uint32_t> staticSizes;
     size_t runtimeDims;
   };
 
   struct ArrayInfo{
+    bool created = false;
     QualType elementType;
     llvm::Value* size;
   };

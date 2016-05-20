@@ -185,19 +185,48 @@ CGIdeasRuntime::CudaLaunchDeviceFunc(){
 llvm::Function*
 CGIdeasRuntime::CudaAddViewFunc(){
   return GetFunc("__ideas_cuda_add_view",
-    {Int32Ty, VoidPtrTy, Int32Ty, Int32Ty,
-      llvm::PointerType::get(Int32Ty, 0), Int32Ty, Int32Ty});
+    {VoidPtrTy, Int32Ty, Int32Ty,
+      llvm::PointerType::get(Int32Ty, 0), Int32Ty});
 }
 
 llvm::Function*
 CGIdeasRuntime::CudaAddArrayFunc(){
-  return GetFunc("__ideas_cuda_add_array",
-    {Int32Ty, VoidPtrTy, Int32Ty, Int32Ty, Int32Ty});
+  return GetFunc("__ideas_cuda_add_array", {VoidPtrTy, Int32Ty, Int32Ty});
 }
 
 llvm::Function*
-CGIdeasRuntime::CudaAddVarFunc(){
-  return GetFunc("__ideas_cuda_add_var", {Int32Ty, VoidPtrTy});
+CGIdeasRuntime::CudaAddKernelViewFunc(){
+  return GetFunc("__ideas_cuda_add_kernel_view", {Int32Ty, VoidPtrTy});
+}
+
+llvm::Function*
+CGIdeasRuntime::CudaAddKernelArrayFunc(){
+  return GetFunc("__ideas_cuda_add_kernel_array", {Int32Ty, VoidPtrTy});
+}
+
+llvm::Function*
+CGIdeasRuntime::CudaAddKernelVarFunc(){
+  return GetFunc("__ideas_cuda_add_kernel_var", {Int32Ty, VoidPtrTy});
+}
+
+llvm::Function*
+CGIdeasRuntime::CudaCopyViewToDeviceFunc(){
+  return GetFunc("__ideas_cuda_copy_view_to_device", {VoidPtrTy});
+}
+
+llvm::Function*
+CGIdeasRuntime::CudaCopyViewFromDeviceFunc(){
+  return GetFunc("__ideas_cuda_copy_view_from_device", {VoidPtrTy});
+}
+
+llvm::Function*
+CGIdeasRuntime::CudaCopyArrayToDeviceFunc(){
+  return GetFunc("__ideas_cuda_copy_array_to_device", {VoidPtrTy});
+}
+
+llvm::Function*
+CGIdeasRuntime::CudaCopyArrayFromDeviceFunc(){
+  return GetFunc("__ideas_cuda_copy_array_from_device", {VoidPtrTy});
 }
 
 llvm::Function*

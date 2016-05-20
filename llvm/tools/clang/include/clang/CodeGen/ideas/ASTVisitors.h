@@ -85,7 +85,7 @@ public:
       else if(const PointerType* pt = dyn_cast<PointerType>(ct.getTypePtr())){
         (void)pt;
 
-        if(auto ne = dyn_cast<CXXNewExpr>(vd->getInit())){
+        if(auto ne = dyn_cast_or_null<CXXNewExpr>(vd->getInit())){
           if(ne->isArray()){
             arrayVars_.insert(vd);
             switch(opType_){
@@ -105,9 +105,15 @@ public:
   }
 
   void VisitChildren(Stmt* S){
+    if(!S){
+      return;
+    }
+
     for(Stmt::child_iterator I = S->child_begin(),
         E = S->child_end(); I != E; ++I){
-      Visit(*I);
+      if(*I){
+        Visit(*I);
+      }
     }
   }
 

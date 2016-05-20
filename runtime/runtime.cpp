@@ -17,9 +17,6 @@
 
 #include <cuda.h>
 
-#define COPY_IN 1
-#define COPY_OUT 1
-
 using namespace std;
 //using namespace ideas;
 
@@ -458,35 +455,22 @@ namespace{
         dims_.push_back(dim);
       }
 
+      void copyToDevice(){
+        CUresult err = cuMemcpyHtoD(devPtr_, hostPtr_, size_);
+        check(err);
+      }
+
+      void copyFromDevice(){
+        CUresult err = cuMemcpyDtoH(hostPtr_, devPtr_, size_);
+        check(err); 
+      }
+
     private:
       void* hostPtr_;
       CUdeviceptr devPtr_;
       CUdeviceptr dimsPtr_;
       size_t size_;
       vector<uint32_t> dims_;
-    };
-
-    class KernelView{
-    public:
-      KernelView(View* view, uint32_t flags)
-      : view_(view),
-      flags_(flags){}
-
-      bool isRead(){
-        return flags_ & FIELD_READ;
-      }
-
-      bool isWrite(){
-        return flags_ & FIELD_WRITE;
-      }
-
-      View* view(){
-        return view_;
-      }
-
-     private:
-       View* view_; 
-       uint32_t flags_;
     };
 
     class Array{
@@ -519,33 +503,20 @@ namespace{
         return size_;
       }
 
+      void copyToDevice(){
+        CUresult err = cuMemcpyHtoD(devPtr_, hostPtr_, size_);
+        check(err);
+      }
+
+      void copyFromDevice(){
+        CUresult err = cuMemcpyDtoH(hostPtr_, devPtr_, size_);
+        check(err); 
+      }
+
     private:
       void* hostPtr_;
       CUdeviceptr devPtr_;
       uint32_t size_;
-    };
-
-    class KernelArray{
-    public:
-      KernelArray(Array* array, uint32_t flags)
-      : array_(array),
-      flags_(flags){}
-
-      bool isRead(){
-        return flags_ & FIELD_READ;
-      }
-
-      bool isWrite(){
-        return flags_ & FIELD_WRITE;
-      }
-
-      Array* array(){
-        return array_;
-      }
-
-     private:
-       Array* array_; 
-       uint32_t flags_;
     };
 
     class Kernel{
@@ -607,26 +578,12 @@ namespace{
         numThreads_ = numThreads;
       }
 
-      void addView(View* view, uint32_t flags){
-        auto itr = viewMap_.find(view);
-        if(itr != viewMap_.end()){
-          return;
-        }
-
-        auto kernelView = new KernelView(view, flags);
-        viewMap_[view] = kernelView;
-        views_.push_back(kernelView);
+      void addView(View* view){
+        views_.push_back(view);
       }
 
-      void addArray(Array* array, uint32_t flags){
-        auto itr = arrayMap_.find(array);
-        if(itr != arrayMap_.end()){
-          return;
-        }
-
-        auto kernelArray = new KernelArray(array, flags);
-        arrayMap_[array] = kernelArray;
-        arrays_.push_back(kernelArray);
+      void addArray(Array* array){
+        arrays_.push_back(array);
       }
 
       void addVar(void* varPtr, size_t size){
@@ -662,9 +619,7 @@ namespace{
         }
 
         if(!ready_){
-          for(KernelView* kernelView : views_){
-            View* view = kernelView->view();
-
+          for(View* view : views_){
             kernelParams_.push_back(&view->devPtr());
             
             auto& dims = view->dims();
@@ -685,9 +640,7 @@ namespace{
             kernelParams_.push_back(&view->dimsPtr());
           }
 
-          for(KernelArray* kernelArray : arrays_){
-            Array* array = kernelArray->array();
-
+          for(Array* array : arrays_){
             kernelParams_.push_back(&array->devPtr());
           }
 
@@ -706,35 +659,6 @@ namespace{
 
         CUresult err;
 
-#ifdef COPY_IN
-        for(KernelView* kernelView : views_){
-          View* view = kernelView->view();
-
-          /*
-          double* dp = (double*)view->hostPtr();
-          for(size_t i = 0; i < view->size()/8; ++i){
-            cout << "dp[" << i << "] = " << dp[i] << endl;
-          }
-          */
-
-          if(kernelView->isRead()){
-            err = cuMemcpyHtoD(view->devPtr(), view->hostPtr(),
-                               view->size());
-            check(err);
-          }
-        }
-
-        for(KernelArray* kernelArray : arrays_){
-          Array* array = kernelArray->array();
-
-          if(kernelArray->isRead()){
-            err = cuMemcpyHtoD(array->devPtr(), array->hostPtr(),
-                               array->size());
-            check(err);
-          }
-        }
-#endif
-
         //CUstream stream;
         //cuStreamCreate(&stream, 0);
 
@@ -750,30 +674,6 @@ namespace{
         //cuStreamDestroy(stream);
 
         check(err);
-
-#ifdef COPY_OUT
-        for(KernelView* kernelView : views_){
-          View* view = kernelView->view();
-
-          //ndump(view->size());
-
-          if(kernelView->isWrite()){
-            err = cuMemcpyDtoH(view->hostPtr(), view->devPtr(),
-                               view->size());
-            check(err);
-          }
-        }
-
-        for(KernelArray* kernelArray : arrays_){
-          Array* array = kernelArray->array();
-
-          if(kernelArray->isWrite()){
-            err = cuMemcpyDtoH(array->hostPtr(), array->devPtr(),
-                               array->size());
-            check(err);
-          }
-        }
-#endif
 
         if(reduceRetPtr){
           lastSize_ = n;
@@ -829,43 +729,10 @@ namespace{
 
         CUresult err;
 
-#ifdef COPY_IN
-        for(KernelView* kernelView : views_){
-          View* view = kernelView->view();
-
-          /*
-          double* dp = (double*)view->hostPtr();
-          for(size_t i = 0; i < view->size()/8; ++i){
-            cout << "dp[" << i << "] = " << dp[i] << endl;
-          }
-          */
-
-          if(kernelView->isRead()){
-            err = cuMemcpyHtoD(view->devPtr(), view->hostPtr(),
-                               view->size());
-            check(err);
-          }
-        }
-#endif
-
 
         // ndm - call CUB
 
         check(err);
-
-#ifdef COPY_OUT
-        for(KernelView* kernelView : views_){
-          View* view = kernelView->view();
-
-          //ndump(view->size());
-
-          if(kernelView->isWrite()){
-            err = cuMemcpyDtoH(view->hostPtr(), view->devPtr(),
-                               view->size());
-            check(err);
-          }
-        }
-#endif
 #endif
       }      
       
@@ -875,11 +742,9 @@ namespace{
       
     private:
       using KernelParams_ = vector<void*>;
-      using ViewVec_ = vector<KernelView*>;
-      using ArrayVec_ = vector<KernelArray*>;
+      using ViewVec_ = vector<View*>;
+      using ArrayVec_ = vector<Array*>;
       using VarVec_ = vector<void*>;      
-      using ViewMap_ = unordered_map<View*, KernelView*>;
-      using ArrayMap_ = unordered_map<Array*, KernelArray*>;
 
       CUmodule module_;    
       CUfunction function_;
@@ -896,8 +761,6 @@ namespace{
       ViewVec_ views_;
       ArrayVec_ arrays_;
       VarVec_ vars_;
-      ViewMap_ viewMap_;
-      ArrayMap_ arrayMap_;
       uint32_t n_;
       uint32_t lastSize_;  
     };
@@ -971,102 +834,78 @@ namespace{
       return false;
     }
 
-    void addView(uint32_t kernelId,
-                 void** viewPtr,
+    void addView(void** viewPtr,
                  uint32_t elementSize,
                  uint32_t staticDims,
                  uint32_t* staticSizes,
-                 uint32_t runTimeDims,
-                 uint32_t flags){
+                 uint32_t runTimeDims){
       
       void* data = viewPtr[0];
 
       auto itr = viewMap_.find(data);
       
-      View* view;
-
       if(itr != viewMap_.end()){
-        view = itr->second;
-      }
-      else{
-        view = new View(data);
-
-        ++viewPtr;
-        uint32_t* sizes = (uint32_t*)viewPtr;
-
-        size_t size = elementSize;
-
-        for(size_t i = 0; i < runTimeDims; ++i){
-          uint32_t si = *sizes;
-          size *= si;
-
-          view->pushDim(si);
-
-          ++sizes;
-        }
-
-        for(size_t i = 0; i < staticDims; ++i){
-          uint32_t si = staticSizes[i];
-          size *= si;
-
-          view->pushDim(si);
-        }
-
-        CUdeviceptr devPtr;
-        CUresult err = cuMemAlloc(&devPtr, size);
-        check(err);
-
-        view->setDevPtr(devPtr);
-        view->setSize(size);
-
-        viewMap_[data] = view;
+        return;
       }
 
-      auto kitr = kernelMap_.find(kernelId);
-      assert(kitr != kernelMap_.end());
+      View* view = new View(data);
 
-      Kernel* kernel = kitr->second;
+      ++viewPtr;
+      uint32_t* sizes = (uint32_t*)viewPtr;
 
-      kernel->addView(view, flags);
+      size_t size = elementSize;
+
+      for(size_t i = 0; i < runTimeDims; ++i){
+        uint32_t si = *sizes;
+        size *= si;
+
+        view->pushDim(si);
+
+        ++sizes;
+      }
+
+      for(size_t i = 0; i < staticDims; ++i){
+        uint32_t si = staticSizes[i];
+        size *= si;
+
+        view->pushDim(si);
+      }
+
+      CUdeviceptr devPtr;
+      CUresult err = cuMemAlloc(&devPtr, size);
+      check(err);
+
+      view->setDevPtr(devPtr);
+      view->setSize(size);
+
+      viewMap_[data] = view;
     }
 
-    void addArray(uint32_t kernelId,
-                 void* arrayPtr,
-                 uint32_t elementSize,
-                 uint32_t size,
-                 uint32_t flags){
+    void addArray(void* arrayPtr,
+                  uint32_t elementSize,
+                  uint32_t size){
       
       auto itr = arrayMap_.find(arrayPtr);
       
-      Array* array;
-
       if(itr != arrayMap_.end()){
-        array = itr->second;
-      }
-      else{
-        array = new Array(arrayPtr);
-
-        size_t bytes = elementSize * size;
-
-        CUdeviceptr devPtr;
-        CUresult err = cuMemAlloc(&devPtr, bytes);
-        check(err);
-
-        array->setDevPtr(devPtr);
-        array->setSize(bytes);
-
-        arrayMap_[arrayPtr] = array;
+        return;
       }
 
-      auto kitr = kernelMap_.find(kernelId);
-      assert(kitr != kernelMap_.end());
+      Array* array = new Array(arrayPtr);
 
-      Kernel* kernel = kitr->second;
+      size_t bytes = elementSize * size;
 
-      kernel->addArray(array, flags);
+      CUdeviceptr devPtr;
+      CUresult err = cuMemAlloc(&devPtr, bytes);
+      check(err);
+
+      array->setDevPtr(devPtr);
+      array->setSize(bytes);
+
+      arrayMap_[arrayPtr] = array;
     }
 
-    void addVar(uint32_t kernelId, void* varPtr, size_t size){
+    void addKernelVar(uint32_t kernelId, void* varPtr, size_t size){
       auto kitr = kernelMap_.find(kernelId);
       assert(kitr != kernelMap_.end());
 
@@ -1075,21 +914,34 @@ namespace{
       kernel->addVar(varPtr, size);     
     }
 
-    void addKernelView(uint32_t kernelId,
-                       void** viewPtr,
-                       uint32_t flags){
+    void addKernelView(uint32_t kernelId, void** viewPtr){
+      void* data = viewPtr[0];
 
       auto itr = kernelMap_.find(kernelId);
       assert(itr != kernelMap_.end());
 
       Kernel* kernel = itr->second;
       
-      auto vitr = viewMap_.find(viewPtr);
+      auto vitr = viewMap_.find(data);
       assert(vitr != viewMap_.end());
 
       View* view = vitr->second;
 
-      kernel->addView(view, flags);
+      kernel->addView(view);
+    }
+
+    void addKernelArray(uint32_t kernelId, void* arrayPtr){
+      auto itr = kernelMap_.find(kernelId);
+      assert(itr != kernelMap_.end());
+
+      Kernel* kernel = itr->second;
+      
+      auto aitr = arrayMap_.find(arrayPtr);
+      assert(aitr != arrayMap_.end());
+
+      Array* array = aitr->second;
+
+      kernel->addArray(array);
     }
 
     void runKernel(uint32_t kernelId, uint32_t n, void* reducePtr){ 
@@ -1108,6 +960,42 @@ namespace{
       Kernel* kernel = itr->second;
 
       kernel->run2(n, reducePtr);
+    }
+
+    void copyViewToDevice(void** viewPtr){
+      void* data = viewPtr[0];
+
+      auto itr = viewMap_.find(data);
+      assert(itr != viewMap_.end());
+
+      View* view = itr->second;
+      view->copyToDevice();
+    }
+
+    void copyViewFromDevice(void** viewPtr){
+      void* data = viewPtr[0];
+
+      auto itr = viewMap_.find(data);
+      assert(itr != viewMap_.end());
+
+      View* view = itr->second;
+      view->copyFromDevice();
+    }
+
+    void copyArrayToDevice(void* arrayPtr){
+      auto itr = arrayMap_.find(arrayPtr);
+      assert(itr != arrayMap_.end());
+
+      Array* array = itr->second;
+      array->copyToDevice();
+    }
+
+    void copyArrayFromDevice(void* arrayPtr){
+      auto itr = arrayMap_.find(arrayPtr);
+      assert(itr != arrayMap_.end());
+
+      Array* array = itr->second;
+      array->copyFromDevice();
     }
 
   private:
@@ -1175,28 +1063,51 @@ extern "C"{
                                     reduceFloat, reduceSigned, reduceSum);
   }
 
-
-  void __ideas_cuda_add_view(uint32_t kernelId,
-                             void** viewPtr,
+  void __ideas_cuda_add_view(void** viewPtr,
                              uint32_t elementSize,
                              uint32_t staticDims,
                              uint32_t* staticSizes,
-                             uint32_t runtimeDims,
-                             uint32_t flags){
-    _cudaRuntime.addView(kernelId, viewPtr, elementSize,
-      staticDims, staticSizes, runtimeDims, flags);
+                             uint32_t runtimeDims){
+    _cudaRuntime.init();
+    _cudaRuntime.addView(viewPtr, elementSize,
+      staticDims, staticSizes, runtimeDims);
   }
 
-  void __ideas_cuda_add_array(uint32_t kernelId,
-                              void* arrayPtr,
+  void __ideas_cuda_add_array(void* arrayPtr,
                               uint32_t elementSize,
-                              uint32_t size,
-                              uint32_t flags){
-    _cudaRuntime.addArray(kernelId, arrayPtr, elementSize, size, flags);
+                              uint32_t size){
+    _cudaRuntime.init();
+    _cudaRuntime.addArray(arrayPtr, elementSize, size);
   }
 
-  void __ideas_cuda_add_var(uint32_t kernelId, void* varPtr){
-    _cudaRuntime.addVar(kernelId, varPtr, 0);
+  void __ideas_cuda_add_kernel_view(uint32_t kernelId,
+                                    void** viewPtr){
+    _cudaRuntime.addKernelView(kernelId, viewPtr);
+  }
+
+  void __ideas_cuda_add_kernel_array(uint32_t kernelId,
+                                     void* arrayPtr){
+    _cudaRuntime.addKernelArray(kernelId, arrayPtr);
+  }
+
+  void __ideas_cuda_add_kernel_var(uint32_t kernelId, void* varPtr){
+    _cudaRuntime.addKernelVar(kernelId, varPtr, 0);
+  }
+
+  void __ideas_cuda_copy_view_to_device(void** viewPtr){
+    _cudaRuntime.copyViewToDevice(viewPtr);
+  }
+
+  void __ideas_cuda_copy_view_from_device(void** viewPtr){
+    _cudaRuntime.copyViewFromDevice(viewPtr);
+  }
+
+  void __ideas_cuda_copy_array_to_device(void* arrayPtr){
+    _cudaRuntime.copyArrayToDevice(arrayPtr);
+  }
+
+  void __ideas_cuda_copy_array_from_device(void* arrayPtr){
+    _cudaRuntime.copyArrayFromDevice(arrayPtr);
   }
 
   void __ideas_cuda_run_kernel(uint32_t kernelId, uint32_t n, void* reducePtr){

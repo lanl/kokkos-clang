@@ -304,7 +304,7 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
     else if(const PointerType* pt = dyn_cast<PointerType>(ct.getTypePtr())){
       (void)pt;
 
-      if(auto ne = dyn_cast<CXXNewExpr>(vd->getInit())){
+      if(auto ne = dyn_cast_or_null<CXXNewExpr>(vd->getInit())){
         if(ne->isArray()){
           shouldCapture = false;
         }
@@ -410,76 +410,6 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
     assert(info);
   }
 
-  for(const VarDecl* vd : viewVars){    
-    ViewInfo info;
-
-    const RecordType* rt = 
-      dyn_cast<RecordType>(vd->getType().getCanonicalType().getTypePtr());
-    assert(rt && "expected a RecordType");
-
-    const ClassTemplateSpecializationDecl* td = 
-      dyn_cast<ClassTemplateSpecializationDecl>(rt->getDecl());
-    assert(td && "expected a ClassTemplateSpecializationDecl");
-
-    const TemplateArgumentList& tl = td->getTemplateArgs();
-    TemplateArgument ta = tl[0];
-    QualType tt = ta.getAsType();
-
-    const PointerType* pt;
-    const ConstantArrayType* at;
-
-    for(;;){
-      if((at = dyn_cast<ConstantArrayType>(tt.getTypePtr()))){
-        info.staticSizes.push_back(at->getSize().getZExtValue());
-        tt = at->getElementType();
-      }
-      else if((pt = dyn_cast<PointerType>(tt.getTypePtr()))){
-        break;
-      }
-      else{
-        assert(false && "expected a ConstantArrayType or PointerType");        
-      }
-    }
-
-    info.runtimeDims = 1;
-
-    for(;;){
-      QualType et = pt->getPointeeType();
-
-      pt = dyn_cast<PointerType>(et.getTypePtr());
-
-      if(!pt){
-        const BuiltinType* bt = dyn_cast<BuiltinType>(et.getTypePtr());
-        assert(bt && "expected a BultinType");
-
-        info.elementType = et;
-        break;
-      }
-
-      ++info.runtimeDims;
-    }
-
-    viewInfoMap_[vd] = info;
-  }
-
-  for(const VarDecl* vd : arrayVars){    
-    ArrayInfo info;
-
-    const PointerType* pt = dyn_cast<PointerType>(vd->getType());
-    assert(pt);
-
-    info.elementType = pt->getPointeeType();
-
-    auto ne = dyn_cast<CXXNewExpr>(vd->getInit());
-    assert(ne);
-    assert(ne->isArray());
-
-    info.size = EmitAnyExprToTemp(ne->getArraySize()).getScalarVal();
-    info.size = B.CreateTrunc(info.size, Int32Ty);
-
-    arrayInfoMap_[vd] = info;
-  }
-
   parallelForStack_.push_back(info);
 
   BasicBlock* startBlock = B.GetInsertBlock(); 
@@ -499,17 +429,29 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
   TypeVec params;
 
   for(const VarDecl* vd : viewVars){
+    CreateKokkosViewTypeInfo(vd);
+
     llvm::Type* t = ConvertType(viewInfoMap_[vd].elementType);
     params.push_back(llvm::PointerType::get(t, 0));
     params.push_back(llvm::PointerType::get(Int32Ty, 0));
   }
 
+  for(const VarDecl* vd : writeViewVars){
+    GetOrCreateKokkosView(vd);
+  }
+
   for(const VarDecl* vd : arrayVars){
+    CreateKokkosArrayTypeInfo(vd);
+    
     const PointerType* pt = dyn_cast<PointerType>(vd->getType());
     assert(pt);
 
     llvm::Type* t = ConvertType(pt->getPointeeType());
     params.push_back(llvm::PointerType::get(t, 0));
+  }
+
+  for(const VarDecl* vd : writeArrayVars){
+    GetOrCreateKokkosArray(vd);
   }
 
   for(const VarDecl* vd : captureVars){
@@ -1190,74 +1132,13 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
   B.SetInsertPoint(initBlock);
 
   for(const VarDecl* vd : viewVars){
-    ViewInfo& info = viewInfoMap_[vd];
-
-    llvm::Type* t = ConvertType(info.elementType);
-    uint32_t elementSize = t->getPrimitiveSizeInBits()/8;
-
-    Address addr = GetAddrOfLocalVar(vd);
-    assert(addr.isValid());
-    
-    Value* viewPtr = B.CreateBitCast(addr.getPointer(), VoidPtrTy);
-    
-    uint32_t flags = 0;
-    
-    if(readViewVars.find(vd) != readViewVars.end()){
-      flags |= 0x01;
-    }
-    
-    if(writeViewVars.find(vd) != writeViewVars.end()){
-      flags |= 0x02;
-    }
-
-    Value* staticDims = ConstantInt::get(Int32Ty, info.staticSizes.size());
-    Value* staticSizes = B.CreateAlloca(Int32Ty, staticDims);
-
-    size_t i = 0;
-    for(uint32_t ss : info.staticSizes){
-      Address sizePtr = ideasAddr(B.CreateConstGEP1_32(staticSizes, i));
-      B.CreateStore(ConstantInt::get(Int32Ty, ss), sizePtr);
-      ++i;
-    }
-
-    ValueVec args = 
-      {kernelId, viewPtr, ConstantInt::get(Int32Ty, elementSize), 
-       staticDims,
-       staticSizes,
-       ConstantInt::get(Int32Ty, info.runtimeDims),
-       ConstantInt::get(Int32Ty, flags)};
-
-    B.CreateCall(R.CudaAddViewFunc(), args);
+    Value* viewPtr = GetOrCreateKokkosView(vd);
+    B.CreateCall(R.CudaAddKernelViewFunc(), {kernelId, viewPtr});  
   }
 
   for(const VarDecl* vd : arrayVars){
-    ArrayInfo& info = arrayInfoMap_[vd];
-
-    llvm::Type* t = ConvertType(info.elementType);
-    uint32_t elementSize = t->getPrimitiveSizeInBits()/8;
-
-    Address addr = GetAddrOfLocalVar(vd);
-    assert(addr.isValid());
-
-    Value* ptr = B.CreateLoad(addr);
-
-    Value* arrayPtr = B.CreateBitCast(ptr, VoidPtrTy);
-    
-    uint32_t flags = 0;
-    
-    if(readArrayVars.find(vd) != readArrayVars.end()){
-      flags |= 0x01;
-    }
-    
-    if(writeArrayVars.find(vd) != writeArrayVars.end()){
-      flags |= 0x02;
-    }
-
-    ValueVec args = 
-      {kernelId, arrayPtr, ConstantInt::get(Int32Ty, elementSize), 
-       info.size, ConstantInt::get(Int32Ty, flags)};
-
-    B.CreateCall(R.CudaAddArrayFunc(), args);
+    Value* arrayPtr = GetOrCreateKokkosArray(vd);
+    B.CreateCall(R.CudaAddKernelArrayFunc(), {kernelId, arrayPtr});  
   }
 
   for(const VarDecl* vd : captureVars){
@@ -1266,7 +1147,7 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
 
     Value* varPtr = B.CreateBitCast(itr->second.getPointer(), VoidPtrTy);
 
-    B.CreateCall(R.CudaAddVarFunc(), {kernelId, varPtr});  
+    B.CreateCall(R.CudaAddKernelVarFunc(), {kernelId, varPtr});  
   }
 
   for(const VarDecl* vd : arrayVars){
@@ -1917,12 +1798,235 @@ void CodeGenFunction::EmitStopPoint(const Stmt *S) {
   }
 }
 
-void CodeGenFunction::EmitStmt(const Stmt *S) {
-  assert(S && "Null statement?");
-  PGO.setCurrentStmt(S);
+void CodeGenFunction::CreateKokkosViewTypeInfo(const VarDecl* vd){
+  if(viewInfoMap_.find(vd) != viewInfoMap_.end()){
+    return;
+  }
 
+  ViewInfo info;
+
+  const RecordType* rt = 
+    dyn_cast<RecordType>(vd->getType().getCanonicalType().getTypePtr());
+  assert(rt && "expected a RecordType");
+
+  const ClassTemplateSpecializationDecl* td = 
+    dyn_cast<ClassTemplateSpecializationDecl>(rt->getDecl());
+  assert(td && "expected a ClassTemplateSpecializationDecl");
+
+  const TemplateArgumentList& tl = td->getTemplateArgs();
+  TemplateArgument ta = tl[0];
+  QualType tt = ta.getAsType();
+
+  const PointerType* pt;
+  const ConstantArrayType* at;
+
+  for(;;){
+    if((at = dyn_cast<ConstantArrayType>(tt.getTypePtr()))){
+      info.staticSizes.push_back(at->getSize().getZExtValue());
+      tt = at->getElementType();
+    }
+    else if((pt = dyn_cast<PointerType>(tt.getTypePtr()))){
+      break;
+    }
+    else{
+      assert(false && "expected a ConstantArrayType or PointerType");        
+    }
+  }
+
+  info.runtimeDims = 1;
+
+  for(;;){
+    QualType et = pt->getPointeeType();
+
+    pt = dyn_cast<PointerType>(et.getTypePtr());
+
+    if(!pt){
+      const BuiltinType* bt = dyn_cast<BuiltinType>(et.getTypePtr());
+      assert(bt && "expected a BultinType");
+
+      info.elementType = et;
+      break;
+    }
+
+    ++info.runtimeDims;
+  }
+
+  viewInfoMap_[vd] = info;   
+}
+
+void CodeGenFunction::CreateKokkosArrayTypeInfo(const VarDecl* vd){  
+  if(arrayInfoMap_.find(vd) != arrayInfoMap_.end()){
+    return;
+  }
+
+  auto& B = Builder;
+
+  ArrayInfo info;
+
+  const PointerType* pt = dyn_cast<PointerType>(vd->getType());
+  assert(pt);
+
+  info.elementType = pt->getPointeeType();
+
+  auto ne = dyn_cast_or_null<CXXNewExpr>(vd->getInit());
+  assert(ne);
+  assert(ne->isArray());
+
+  info.size = EmitAnyExprToTemp(ne->getArraySize()).getScalarVal();
+  info.size = B.CreateTrunc(info.size, Int32Ty);
+
+  arrayInfoMap_[vd] = info;  
+}
+
+// +================== ideas
+llvm::Value* CodeGenFunction::GetOrCreateKokkosView(const VarDecl* vd){
+  using namespace llvm;
+  using namespace std;
+
+  using ValueVec = vector<Value*>;
+  using TypeVec = vector<llvm::Type*>;
+
+  auto& B = Builder;
+  auto& R = CGM.getIdeasRuntime();
+  LLVMContext& C = getLLVMContext();
+
+
+  CreateKokkosViewTypeInfo(vd);
+
+  ViewInfo& info = viewInfoMap_[vd];
+
+  Address addr = GetAddrOfLocalVar(vd);
+  assert(addr.isValid());
+  
+  Value* viewPtr = B.CreateBitCast(addr.getPointer(), VoidPtrTy);
+
+  if(info.created){
+    return viewPtr;
+  }
+
+  info.created = true;
+
+  llvm::Type* t = ConvertType(info.elementType);
+  uint32_t elementSize = t->getPrimitiveSizeInBits()/8;
+
+  Value* staticDims = ConstantInt::get(Int32Ty, info.staticSizes.size());
+  Value* staticSizes = B.CreateAlloca(Int32Ty, staticDims);
+
+  size_t i = 0;
+  for(uint32_t ss : info.staticSizes){
+    Address sizePtr = ideasAddr(B.CreateConstGEP1_32(staticSizes, i));
+    B.CreateStore(ConstantInt::get(Int32Ty, ss), sizePtr);
+    ++i;
+  }
+
+  ValueVec args = 
+    {viewPtr, ConstantInt::get(Int32Ty, elementSize), 
+     staticDims,
+     staticSizes,
+     ConstantInt::get(Int32Ty, info.runtimeDims)};
+
+  B.CreateCall(R.CudaAddViewFunc(), args);
+
+  return viewPtr;
+}
+
+llvm::Value* CodeGenFunction::GetOrCreateKokkosArray(const VarDecl* vd){
+  using namespace llvm;
+  using namespace std;
+
+  using ValueVec = vector<Value*>;
+  using TypeVec = vector<llvm::Type*>;
+
+  auto& B = Builder;
+  auto& R = CGM.getIdeasRuntime();
+  LLVMContext& C = getLLVMContext();
+
+  auto aitr = arrayInfoMap_.find(vd);
+  
+  CreateKokkosArrayTypeInfo(vd);
+
+  ArrayInfo& info = arrayInfoMap_[vd];
+
+  Address addr = GetAddrOfLocalVar(vd);
+  assert(addr.isValid());
+
+  Value* ptr = B.CreateLoad(addr);
+
+  Value* arrayPtr = B.CreateBitCast(ptr, VoidPtrTy);
+  
+  if(info.created){
+    return arrayPtr;
+  }
+
+  llvm::Type* t = ConvertType(info.elementType);
+  uint32_t elementSize = t->getPrimitiveSizeInBits()/8;
+
+  info.created = true;
+
+  ValueVec args = 
+    {arrayPtr, ConstantInt::get(Int32Ty, elementSize), info.size};
+
+  B.CreateCall(R.CudaAddArrayFunc(), args);
+
+  return arrayPtr;
+}
+// ====================================
+
+void CodeGenFunction::CopyKokkosDataToDevice(const Stmt* S){
   // +====== ideas =============================
   if(isMainStmt(S)){
+    using namespace llvm;
+    using namespace std;
+
+    using ValueVec = vector<Value*>;
+    using TypeVec = vector<llvm::Type*>;
+
+    auto& B = Builder;
+    auto& R = CGM.getIdeasRuntime();
+    LLVMContext& C = getLLVMContext();
+
+    const Stmt* stmt;
+    if(auto e = dyn_cast<ExprWithCleanups>(S)){
+      stmt = e->getSubExpr();
+    }
+    else{
+      stmt = S;
+    }
+
+    auto itr = ParallelAnalysis::toDeviceViews().find(stmt);
+    if(itr != ParallelAnalysis::toDeviceViews().end()){
+      for(const VarDecl* vd : itr->second){
+        Value* ptr = GetOrCreateKokkosView(vd);
+        ValueVec args = {ptr};
+        B.CreateCall(R.CudaCopyViewToDeviceFunc(), args);
+      }
+    }
+
+    itr = ParallelAnalysis::toDeviceArrays().find(stmt);
+    if(itr != ParallelAnalysis::toDeviceArrays().end()){
+      for(const VarDecl* vd : itr->second){
+        Value* ptr = GetOrCreateKokkosArray(vd);
+        ValueVec args = {ptr};
+        B.CreateCall(R.CudaCopyArrayToDeviceFunc(), args);
+      }
+    }
+  }
+  // ===========================================
+}
+
+void CodeGenFunction::CopyKokkosDataFromDevice(const Stmt* S){
+  // +====== ideas =============================
+  if(isMainStmt(S)){
+    using namespace llvm;
+    using namespace std;
+
+    using ValueVec = vector<Value*>;
+    using TypeVec = vector<llvm::Type*>;
+
+    auto& B = Builder;
+    auto& R = CGM.getIdeasRuntime();
+    LLVMContext& C = getLLVMContext();
+
     const Stmt* stmt;
     if(auto e = dyn_cast<ExprWithCleanups>(S)){
       stmt = e->getSubExpr();
@@ -1934,40 +2038,37 @@ void CodeGenFunction::EmitStmt(const Stmt *S) {
     auto itr = ParallelAnalysis::fromDeviceViews().find(stmt);
     if(itr != ParallelAnalysis::fromDeviceViews().end()){
       for(const VarDecl* vd : itr->second){
-        // output copy view from device runtime calls before stmt
-        //vd->dump();
+        Value* ptr = GetOrCreateKokkosView(vd);
+        ValueVec args = {ptr};
+        B.CreateCall(R.CudaCopyViewFromDeviceFunc(), args);
       }
     }
 
     itr = ParallelAnalysis::fromDeviceArrays().find(stmt);
     if(itr != ParallelAnalysis::fromDeviceArrays().end()){
       for(const VarDecl* vd : itr->second){
-        // output copy view from device runtime calls before stmt
-        //vd->dump();
-      }
-    }
-
-    itr = ParallelAnalysis::toDeviceViews().find(stmt);
-    if(itr != ParallelAnalysis::toDeviceViews().end()){
-      for(const VarDecl* vd : itr->second){
-        // output copy view to device runtime calls after stmt
-        //vd->dump();
-      }
-    }
-
-    itr = ParallelAnalysis::toDeviceArrays().find(stmt);
-    if(itr != ParallelAnalysis::toDeviceArrays().end()){
-      for(const VarDecl* vd : itr->second){
-        // output copy view to device runtime calls after stmt
-        //vd->dump();
+        Value* ptr = GetOrCreateKokkosArray(vd);
+        ValueVec args = {ptr};
+        B.CreateCall(R.CudaCopyArrayFromDeviceFunc(), args);
       }
     }
   }
   // ===========================================
+}
+
+void CodeGenFunction::EmitStmt(const Stmt *S) {
+  assert(S && "Null statement?");
+  PGO.setCurrentStmt(S);
+
+  // +===== ideas
+  CopyKokkosDataFromDevice(S);
 
   // These statements have their own debug info handling.
-  if (EmitSimpleStmt(S))
+  if (EmitSimpleStmt(S)){
+    // +===== ideas
+    CopyKokkosDataToDevice(S);
     return;
+  }
 
   // Check if we are generating unreachable code.
   if (!HaveInsertPoint()) {
@@ -2169,6 +2270,9 @@ void CodeGenFunction::EmitStmt(const Stmt *S) {
     EmitOMPTargetDataDirective(cast<OMPTargetDataDirective>(*S));
     break;
   }
+
+  // +===== ideas
+  CopyKokkosDataToDevice(S);
 }
 
 bool CodeGenFunction::EmitSimpleStmt(const Stmt *S) {
