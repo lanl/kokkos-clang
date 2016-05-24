@@ -144,11 +144,9 @@ int main(int argc, char* argv[])
      printf("  Computed result for %d x %d is %lf\n", N, M, result);
    const double solution = (double)N * (double)M;
 
-   /*
     if ( result != solution ) {
       printf("  Error: result( %lf ) != solution( %lf )\n",result,solution);
     }
-    */
   }
 
   gettimeofday(&end,NULL);

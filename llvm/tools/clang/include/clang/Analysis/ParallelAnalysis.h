@@ -101,11 +101,12 @@ namespace clang{
 
       BlockSet vs;
       Data data;
-      Visit(cfg.get(), nullptr, vs, data, cfg->getEntry());
+      Visit(cfg.get(), nullptr, nullptr, vs, data, cfg->getEntry());
     }
                       
     static void Visit(CFG* cfg,
                       const Stmt* prevStmt,
+                      const Stmt* prevKokkosStmt,
                       BlockSet& vs,
                       Data& data,
                       CFGBlock& block){
@@ -113,6 +114,7 @@ namespace clang{
       vs.insert(&block);
 
       const Stmt* lastStmt = prevStmt;
+      const Stmt* lastKokkosStmt = prevKokkosStmt;
 
       for(auto itr = block.begin(), itrEnd = block.end();
           itr != itrEnd; ++itr){
@@ -143,7 +145,8 @@ namespace clang{
 
             for(auto vd : data.writeViewVars){
               if(visitor.readViewVars().find(vd) != visitor.readViewVars().end()){                
-                addVar(toDeviceViews_, lastStmt, vd);
+                addVar(toDeviceViews_,
+                       lastKokkosStmt ? lastKokkosStmt : lastStmt, vd);
                 remove.insert(vd);
               }
             }
@@ -157,7 +160,8 @@ namespace clang{
             for(auto vd : data.writeArrayVars){
               if(visitor.readArrayVars().find(vd) !=
                  visitor.readArrayVars().end()){
-                addVar(toDeviceArrays_, lastStmt, vd);
+                addVar(toDeviceArrays_,
+                       lastKokkosStmt ? lastKokkosStmt : lastStmt, vd);
                 remove.insert(vd);
               }
             }
@@ -215,6 +219,10 @@ namespace clang{
           }
 
           if(found){
+            lastKokkosStmt = stmt;
+          }
+
+          if(!isa<CXXConstructExpr>(stmt)){
             lastStmt = stmt;
           }
         }
@@ -229,10 +237,12 @@ namespace clang{
         CFGBlock* block = b.getReachableBlock();
         
         if(block && vs.find(block) == vs.end()){
-          Visit(cfg, lastStmt, vs, data, *block);
+          Visit(cfg, lastStmt, lastKokkosStmt, vs, data, *block);
           found = true;
         }
       }
+
+      (void)found;
     }
 
     static void addVar(DataMap& m, const Stmt* s, const VarDecl* vd){

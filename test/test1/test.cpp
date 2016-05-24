@@ -13,10 +13,14 @@ int main (int argc, char* argv[]) {
 
   view_type a ("A", SIZE);
 
+  a(0,0) = 11500;
+  a(0,1) = 111500;
+  a(0,2) = 112500;
+
   Kokkos::parallel_for (SIZE, KOKKOS_LAMBDA (const int i) {
-    a(i,0) = 1.0*i;
-    a(i,1) = 1.0*i*i;
-    a(i,2) = 1.0*i*i*i;
+    a(i,0) += 1.0;
+    a(i,1) += 1.0;
+    a(i,2) += 1.0;
   });
 
   double sum = 0;
