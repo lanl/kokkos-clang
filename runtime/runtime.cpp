@@ -595,12 +595,12 @@ namespace{
       }
 
       void run(uint32_t n, void* reduceRetPtr){
+        reduceRetPtr_ = reduceRetPtr;
         n_ = n;
-        size_t gridDimX;
         size_t sharedMemBytes;
 
-        if(reduceRetPtr){
-          gridDimX = (n_ + (BLOCK_SIZE * 2 - 1))/(BLOCK_SIZE * 2);
+        if(reduceRetPtr_){
+          gridDimX_ = (n_ + (BLOCK_SIZE * 2 - 1))/(BLOCK_SIZE * 2);
           
           if(n_ != lastSize_){
             if(lastSize_ > 0){
@@ -609,15 +609,15 @@ namespace{
               check(err);
             }
 
-            hostPtr_ = malloc(gridDimX * reduceSize_);
-            CUresult err = cuMemAlloc(&reducePtr_, gridDimX * reduceSize_);
+            hostPtr_ = malloc(gridDimX_ * reduceSize_);
+            CUresult err = cuMemAlloc(&reducePtr_, gridDimX_ * reduceSize_);
             check(err);
           }
 
-          sharedMemBytes = reduceSize_ * gridDimX;
+          sharedMemBytes = reduceSize_ * gridDimX_;
         }
         else{
-          gridDimX = (n_ + BLOCK_SIZE - 1)/BLOCK_SIZE;
+          gridDimX_ = (n_ + BLOCK_SIZE - 1)/BLOCK_SIZE;
           sharedMemBytes = 0;
         }
 
@@ -662,24 +662,35 @@ namespace{
 
         CUresult err;
 
-        err = cuLaunchKernel(function_, gridDimX, 1, 1,
+        err = cuLaunchKernel(function_, gridDimX_, 1, 1,
                              BLOCK_SIZE, 1, 1, 
                              sharedMemBytes, stream_,
                              kernelParams_.data(), nullptr);
 
         //ndump(kernelParams_.size());
 
-        cuStreamSynchronize(stream_);
-
         check(err);
 
-        if(reduceRetPtr){
-          lastSize_ = n;
+        lastSize_ = n;
 
-          reduce(hostPtr_, reducePtr_, gridDimX, reduceSize_, reduceFloat_,
-                 reduceSigned_, reduceSum_, reduceRetPtr);
+        // ndm - fix
+        if(reduceRetPtr_){
+          cuStreamSynchronize(stream_);
+
+          reduce(hostPtr_, reducePtr_, gridDimX_, reduceSize_, reduceFloat_,
+                 reduceSigned_, reduceSum_, reduceRetPtr_);
+        }        
+      }
+
+      void await(){
+        cuStreamSynchronize(stream_);
+
+        /*
+        if(reduceRetPtr_){
+          reduce(hostPtr_, reducePtr_, gridDimX_, reduceSize_, reduceFloat_,
+                 reduceSigned_, reduceSum_, reduceRetPtr_);
         }
-
+        */
       }
 
       void run2(uint32_t n, void* reduceRetPtr){
@@ -748,6 +759,7 @@ namespace{
       CUfunction function_;
       CUstream stream_;
       uint32_t reduceSize_;
+      void* reduceRetPtr_;
       bool reduceFloat_;
       bool reduceSigned_;
       bool reduceSum_;
@@ -761,7 +773,8 @@ namespace{
       ArrayVec_ arrays_;
       VarVec_ vars_;
       uint32_t n_;
-      uint32_t lastSize_;  
+      uint32_t lastSize_;
+      size_t gridDimX_;
     };
 
     CUDARuntime(){
@@ -952,6 +965,15 @@ namespace{
       kernel->run(n, reducePtr);
     }
 
+    void awaitKernel(uint32_t kernelId){ 
+      auto itr = kernelMap_.find(kernelId);
+      assert(itr != kernelMap_.end());
+
+      Kernel* kernel = itr->second;
+
+      kernel->await();
+    }
+
     void runKernel2(uint32_t kernelId, uint32_t n, void* reducePtr){ 
       auto itr = kernelMap_.find(kernelId);
       assert(itr != kernelMap_.end());
@@ -1113,6 +1135,10 @@ extern "C"{
 
   void __ideas_cuda_run_kernel(uint32_t kernelId, uint32_t n, void* reducePtr){
     return _cudaRuntime.runKernel(kernelId, n, reducePtr);
+  }
+
+  void __ideas_cuda_await_kernel(uint32_t kernelId){
+    return _cudaRuntime.awaitKernel(kernelId);
   }
 
   void __ideas_cuda_run_kernel2(uint32_t kernelId, uint32_t n, void* reducePtr){

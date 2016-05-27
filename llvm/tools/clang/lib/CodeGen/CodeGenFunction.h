@@ -149,6 +149,8 @@ public:
 
   void CopyKokkosDataFromDevice(const Stmt* S);
 
+  void KokkosSynchronize(const Stmt* S);
+
   // +==============================================
   
   /// A jump destination is an abstract label, branching to which may

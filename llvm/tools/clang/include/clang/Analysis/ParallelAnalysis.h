@@ -71,6 +71,7 @@
 
 #include <unordered_set>
 #include <unordered_map>
+#include <map>
 
 #include <iostream>
 
@@ -114,7 +115,7 @@ namespace clang{
       ParallelConstructSet parallelConstructs;
     };
 
-    using SynchMap = std::unordered_map<const Stmt*, ParallelConstruct*>;
+    using SynchMap = std::multimap<const Stmt*, ParallelConstruct*>;
 
     using ParallelConstructMap = 
       std::unordered_map<const Stmt*, ParallelConstruct*>;
@@ -377,6 +378,10 @@ namespace clang{
       auto itr = pmap_.find(stmt);
       assert(itr != pmap_.end() && "invalid parallel construct");
       return itr->second;
+    }
+
+    static SynchMap& synchMap(){
+      return synchMap_;
     }
 
   private:

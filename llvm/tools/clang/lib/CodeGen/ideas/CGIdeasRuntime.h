@@ -114,6 +114,7 @@ namespace CodeGen {
     llvm::Function* CudaCopyArrayFromDeviceFunc();
     llvm::Function* CudaAddKernelVarFunc();
     llvm::Function* CudaRunKernelFunc();
+    llvm::Function* CudaAwaitKernelFunc();
     llvm::Function* CudaRunKernel2Func();
 
     llvm::Function* CudaLaunchDeviceFunc();

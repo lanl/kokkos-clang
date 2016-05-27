@@ -235,6 +235,11 @@ CGIdeasRuntime::CudaRunKernelFunc(){
 }
 
 llvm::Function*
+CGIdeasRuntime::CudaAwaitKernelFunc(){
+  return GetFunc("__ideas_cuda_await_kernel", {Int32Ty});
+}
+
+llvm::Function*
 CGIdeasRuntime::CudaRunKernel2Func(){
   return GetFunc("__ideas_cuda_run_kernel2", {Int32Ty, Int32Ty, VoidPtrTy});
 }

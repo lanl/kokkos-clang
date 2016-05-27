@@ -2036,11 +2036,36 @@ void CodeGenFunction::CopyKokkosDataFromDevice(const Stmt* S){
   // ===========================================
 }
 
+// +====== ideas =============================
+void CodeGenFunction::KokkosSynchronize(const Stmt *S){
+  if(isMainStmt(S)){
+    using namespace llvm;
+    using namespace std;
+
+    using ValueVec = vector<Value*>;
+    using TypeVec = vector<llvm::Type*>;
+
+    auto& B = Builder;
+    auto& R = CGM.getIdeasRuntime();
+    LLVMContext& C = getLLVMContext();
+
+    auto sm = ParallelAnalysis::synchMap();
+    auto p = sm.equal_range(S);
+    for(auto itr = p.first, itrEnd = p.second; itr != itrEnd; ++itr){
+      auto pc = itr->second;
+      ValueVec args = {ConstantInt::get(Int32Ty, pc->id)};
+      B.CreateCall(R.CudaAwaitKernelFunc(), args);  
+    }
+  }  
+}
+// ===========================================
+
 void CodeGenFunction::EmitStmt(const Stmt *S) {
   assert(S && "Null statement?");
   PGO.setCurrentStmt(S);
 
   // +===== ideas
+  KokkosSynchronize(S);
   CopyKokkosDataFromDevice(S);
 
   // These statements have their own debug info handling.
