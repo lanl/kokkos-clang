@@ -88,15 +88,6 @@ namespace clang{
 
     using DataMap = std::unordered_map<const Stmt*, VarSet>;
 
-    struct Data{
-      VarSet viewVars;
-      VarSet readViewVars;
-      VarSet writeViewVars;
-      VarSet arrayVars;
-      VarSet readArrayVars;
-      VarSet writeArrayVars;
-    };
-
     struct ParallelConstruct{
       using ReduceOpSet = std::unordered_set<const Stmt*>;
 
@@ -109,6 +100,18 @@ namespace clang{
       VarSet readArrayVars;
       VarSet writeArrayVars;
       const VarDecl* reduceVar;
+    };
+
+    using ParallelConstructSet = std::set<ParallelConstruct*>;
+
+    struct Data{
+      VarSet viewVars;
+      VarSet readViewVars;
+      VarSet writeViewVars;
+      VarSet arrayVars;
+      VarSet readArrayVars;
+      VarSet writeArrayVars;
+      ParallelConstructSet parallelConstructs;
     };
 
     using SynchMap = std::unordered_map<const Stmt*, ParallelConstruct*>;
@@ -166,10 +169,12 @@ namespace clang{
             
             VarSet remove;
 
+            const VarDecl* insertStmt = 
+              lastKokkosStmt ? lastKokkosStmt : lastStmt;
+
             for(auto vd : data.writeViewVars){
               if(visitor.readViewVars().find(vd) != visitor.readViewVars().end()){                
-                addVar(toDeviceViews_,
-                       lastKokkosStmt ? lastKokkosStmt : lastStmt, vd);
+                addVar(toDeviceViews_, insertStmt, vd);
                 remove.insert(vd);
               }
             }
@@ -183,8 +188,7 @@ namespace clang{
             for(auto vd : data.writeArrayVars){
               if(visitor.readArrayVars().find(vd) !=
                  visitor.readArrayVars().end()){
-                addVar(toDeviceArrays_,
-                       lastKokkosStmt ? lastKokkosStmt : lastStmt, vd);
+                addVar(toDeviceArrays_, insertStmt, vd);
                 remove.insert(vd);
               }
             }
@@ -199,6 +203,36 @@ namespace clang{
             data.readArrayVars.insert(visitor.writeArrayVars().begin(),
               visitor.writeArrayVars().end());
 
+            for(auto vd : visitor.readViewVars()){
+              std::set<ParallelConstruct*> rp;
+
+              for(ParallelConstruct* pc : data.parallelConstructs){
+                if(pc->writeViewVars.find(vd) != pc->writeViewVars.end()){
+                  synchMap_.emplace(insertStmt, pc);
+                  rp.insert(pc);
+                }
+              }
+
+              for(auto pc : rp){
+                data.parallelConstructs.erase(pc);
+              }
+            }
+
+            for(auto vd : visitor.readArrayVars()){
+              std::set<ParallelConstruct*> rp;
+
+              for(ParallelConstruct* pc : data.parallelConstructs){
+                if(pc->writeArrayVars.find(vd) != pc->writeArrayVars.end()){
+                  synchMap_.emplace(insertStmt, pc);
+                  rp.insert(pc);
+                }
+              }
+
+              for(auto pc : rp){
+                data.parallelConstructs.erase(pc);
+              }
+            }
+
             auto pitr = pmap_.find(stmt);
             if(pitr == pmap_.end()){
               auto c = new ParallelConstruct;
@@ -212,6 +246,7 @@ namespace clang{
               c->reduceOps = std::move(visitor.reduceOps());
               c->reduceVar = visitor.reduceVar();
               pmap_.emplace(stmt, c);
+              data.parallelConstructs.insert(c);
             }
           }
         }
@@ -235,6 +270,19 @@ namespace clang{
             if(data.readViewVars.find(vd) != data.readViewVars.end()){
               addVar(fromDeviceViews_, stmt, vd);
               remove.insert(vd);
+
+              std::set<ParallelConstruct*> rp;
+
+              for(ParallelConstruct* pc : data.parallelConstructs){
+                if(pc->writeViewVars.find(vd) != pc->writeViewVars.end()){
+                  synchMap_.emplace(stmt, pc);
+                  rp.insert(pc);
+                }
+              }
+
+              for(auto pc : rp){
+                data.parallelConstructs.erase(pc);
+              }
             }
           }
 
@@ -249,6 +297,19 @@ namespace clang{
             if(data.readArrayVars.find(vd) != data.readArrayVars.end()){
               addVar(fromDeviceArrays_, stmt, vd);
               remove.insert(vd);
+
+              std::set<ParallelConstruct*> rp;
+
+              for(ParallelConstruct* pc : data.parallelConstructs){
+                if(pc->writeArrayVars.find(vd) != pc->writeArrayVars.end()){
+                  synchMap_.emplace(stmt, pc);
+                  rp.insert(pc);
+                }
+              }
+
+              for(auto pc : rp){
+                data.parallelConstructs.erase(pc);
+              }
             }
           }
 
