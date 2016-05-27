@@ -568,10 +568,13 @@ namespace{
 
         err = cuModuleGetFunction(&function_, module_, "run");
         check(err);
+
+        err = cuStreamCreate(&stream_, 0);
+        check(err);
       }
 
       ~Kernel(){
-
+        cuStreamDestroy(stream_);
       }
       
       void setNumThreads(size_t numThreads){
@@ -659,19 +662,14 @@ namespace{
 
         CUresult err;
 
-        //CUstream stream;
-        //cuStreamCreate(&stream, 0);
-
         err = cuLaunchKernel(function_, gridDimX, 1, 1,
                              BLOCK_SIZE, 1, 1, 
-                             sharedMemBytes, nullptr/*stream*/,
+                             sharedMemBytes, stream_,
                              kernelParams_.data(), nullptr);
 
         //ndump(kernelParams_.size());
 
-        //cuStreamSynchronize(stream);
-
-        //cuStreamDestroy(stream);
+        cuStreamSynchronize(stream_);
 
         check(err);
 
@@ -748,6 +746,7 @@ namespace{
 
       CUmodule module_;    
       CUfunction function_;
+      CUstream stream_;
       uint32_t reduceSize_;
       bool reduceFloat_;
       bool reduceSigned_;
@@ -914,7 +913,7 @@ namespace{
       kernel->addVar(varPtr, size);     
     }
 
-    void addKernelView(uint32_t kernelId, void** viewPtr){
+    void addKernelView(uint32_t kernelId, void** viewPtr, uint32_t flags){
       void* data = viewPtr[0];
 
       auto itr = kernelMap_.find(kernelId);
@@ -930,7 +929,7 @@ namespace{
       kernel->addView(view);
     }
 
-    void addKernelArray(uint32_t kernelId, void* arrayPtr){
+    void addKernelArray(uint32_t kernelId, void* arrayPtr, uint32_t flags){
       auto itr = kernelMap_.find(kernelId);
       assert(itr != kernelMap_.end());
 
@@ -1081,13 +1080,15 @@ extern "C"{
   }
 
   void __ideas_cuda_add_kernel_view(uint32_t kernelId,
-                                    void** viewPtr){
-    _cudaRuntime.addKernelView(kernelId, viewPtr);
+                                    void** viewPtr,
+                                    uint32_t flags){
+    _cudaRuntime.addKernelView(kernelId, viewPtr, flags);
   }
 
   void __ideas_cuda_add_kernel_array(uint32_t kernelId,
-                                     void* arrayPtr){
-    _cudaRuntime.addKernelArray(kernelId, arrayPtr);
+                                     void* arrayPtr,
+                                     uint32_t flags){
+    _cudaRuntime.addKernelArray(kernelId, arrayPtr, flags);
   }
 
   void __ideas_cuda_add_kernel_var(uint32_t kernelId, void* varPtr){

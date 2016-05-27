@@ -62,6 +62,8 @@ using namespace CodeGen;
 namespace{
 
 const uint32_t REDUCE_KERNEL = 0b1;
+const uint32_t FLAG_READ = 0b1;
+const uint32_t FLAG_WRITE = 0b10;
 
 } // namespace
 
@@ -1133,12 +1135,36 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
 
   for(const VarDecl* vd : viewVars){
     Value* viewPtr = GetOrCreateKokkosView(vd);
-    B.CreateCall(R.CudaAddKernelViewFunc(), {kernelId, viewPtr});  
+
+    uint32_t flags = 0;
+
+    if(readViewVars.find(vd) != readViewVars.end()){
+      flags |= FLAG_READ;
+    }
+
+    if(writeViewVars.find(vd) != writeViewVars.end()){
+      flags |= FLAG_WRITE;
+    }
+
+    B.CreateCall(R.CudaAddKernelViewFunc(),
+                 {kernelId, viewPtr, ConstantInt::get(Int32Ty, flags)});  
   }
 
   for(const VarDecl* vd : arrayVars){
     Value* arrayPtr = GetOrCreateKokkosArray(vd);
-    B.CreateCall(R.CudaAddKernelArrayFunc(), {kernelId, arrayPtr});  
+    
+    uint32_t flags = 0;
+
+    if(readArrayVars.find(vd) != readArrayVars.end()){
+      flags |= FLAG_READ;
+    }
+
+    if(writeArrayVars.find(vd) != writeArrayVars.end()){
+      flags |= FLAG_WRITE;
+    }
+
+    B.CreateCall(R.CudaAddKernelArrayFunc(),
+                 {kernelId, arrayPtr, ConstantInt::get(Int32Ty, flags)});  
   }
 
   for(const VarDecl* vd : captureVars){

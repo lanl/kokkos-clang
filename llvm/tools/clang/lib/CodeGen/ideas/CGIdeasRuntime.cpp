@@ -196,12 +196,12 @@ CGIdeasRuntime::CudaAddArrayFunc(){
 
 llvm::Function*
 CGIdeasRuntime::CudaAddKernelViewFunc(){
-  return GetFunc("__ideas_cuda_add_kernel_view", {Int32Ty, VoidPtrTy});
+  return GetFunc("__ideas_cuda_add_kernel_view", {Int32Ty, VoidPtrTy, Int32Ty});
 }
 
 llvm::Function*
 CGIdeasRuntime::CudaAddKernelArrayFunc(){
-  return GetFunc("__ideas_cuda_add_kernel_array", {Int32Ty, VoidPtrTy});
+  return GetFunc("__ideas_cuda_add_kernel_array", {Int32Ty, VoidPtrTy, Int32Ty});
 }
 
 llvm::Function*
