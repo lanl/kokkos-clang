@@ -59,11 +59,50 @@ public:
 
   using VarSet = std::set<const VarDecl*>;
 
-  PTXParallelConstructVisitor(const VarDecl* reduceVar)
-  : reduceVar_(reduceVar){
+  PTXParallelConstructVisitor()
+  : reduceVar_(nullptr){
   
   }
+  
+  void Run(const CallExpr* E){
+    const LambdaExpr* le = PTXParallelConstructVisitor::GetLambda(E->getArg(1));
+    CXXMethodDecl* md = le->getCallOperator();
+
+    const FunctionDecl* f = E->getDirectCallee();
+    assert(f);
+
+    if(f->getQualifiedNameAsString() == "Kokkos::parallel_for"){
+      assert(md->getNumParams() == 1);
+      assert(E->getNumArgs() == 3);
+    }
+    else if(f->getQualifiedNameAsString() == "Kokkos::parallel_reduce"){
+      reduceVar_ = md->getParamDecl(1);
+      assert(md->getNumParams() == 2);
+      assert(E->getNumArgs() == 5); 
+    }
+    else{
+      assert(false && "expected parallel for or reduce");
+    }
+
+    Visit(const_cast<CallExpr*>(E));
+  }
+
+  static const LambdaExpr* GetLambda(const Expr* E){
+    if(auto me = dyn_cast<MaterializeTemporaryExpr>(E)){
+      E = me->GetTemporaryExpr();
+    }
     
+    if(const CastExpr* c = dyn_cast<CastExpr>(E)){
+      E = c->getSubExpr();
+    }
+
+    if(const CXXBindTemporaryExpr* c = dyn_cast<CXXBindTemporaryExpr>(E)){
+      E = c->getSubExpr();
+    }
+
+    return dyn_cast<LambdaExpr>(E);
+  }
+
   void VisitDeclRefExpr(DeclRefExpr* E){
     if(const VarDecl* vd = dyn_cast<VarDecl>(E->getDecl())){
       QualType ct = vd->getType().getCanonicalType();
@@ -205,32 +244,36 @@ public:
     VisitChildren(S);
   }
 
-  const VarSet& viewVars() const{
+  VarSet& viewVars(){
     return viewVars_;
   }
 
-  const VarSet& readViewVars() const{
+  VarSet& readViewVars(){
     return readViewVars_;
   }
 
-  const VarSet& writeViewVars() const{
+  VarSet& writeViewVars(){
     return writeViewVars_;
   }
 
-  const VarSet& arrayVars() const{
+  VarSet& arrayVars(){
     return arrayVars_;
   }
 
-  const VarSet& readArrayVars() const{
+  VarSet& readArrayVars(){
     return readArrayVars_;
   }
 
-  const VarSet& writeArrayVars() const{
+  VarSet& writeArrayVars(){
     return writeArrayVars_;
   }
 
-  const auto& reduceOps(){
+  auto& reduceOps(){
     return reduceOps_;
+  }
+
+  const VarDecl* reduceVar() const{
+    return reduceVar_;
   }
 
 private:

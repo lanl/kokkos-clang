@@ -87,11 +87,25 @@ namespace clang{
     using DataMap = std::unordered_map<const Stmt*, VarSet>;
 
     struct Data{
+      VarSet viewVars;
       VarSet readViewVars;
       VarSet writeViewVars;
+      VarSet arrayVars;
       VarSet readArrayVars;
       VarSet writeArrayVars;
     };
+
+    struct ParallelConstruct{
+      using ReduceOpSet = std::unordered_set<const Stmt*>;
+
+      ReduceOpSet reduceOps;
+      uint32_t id;
+      Data data;
+      const VarDecl* reduceVar;
+    };
+
+    using ParallelConstructMap = 
+      std::unordered_map<const Stmt*, ParallelConstruct>;
 
     typedef std::unordered_set<CFGBlock*> BlockSet;
     
@@ -126,7 +140,7 @@ namespace clang{
 
         const Stmt* stmt = o.getValue().getStmt();
 
-        CodeGen::PTXParallelConstructVisitor visitor(nullptr);
+        CodeGen::PTXParallelConstructVisitor visitor;
 
         bool isParallelConstruct = false;
 
@@ -139,7 +153,7 @@ namespace clang{
 
             isParallelConstruct = true;
 
-            visitor.Visit(const_cast<Stmt*>(stmt));
+            visitor.Run(ce);
             
             VarSet remove;
 
@@ -175,6 +189,21 @@ namespace clang{
 
             data.readArrayVars.insert(visitor.writeArrayVars().begin(),
               visitor.writeArrayVars().end());
+
+            auto pitr = pmap_.find(stmt);
+            if(pitr == pmap_.end()){
+              ParallelConstruct c;
+              c.id = nextParallelConstructId_++;
+              c.data.viewVars = std::move(visitor.viewVars());
+              c.data.readViewVars = std::move(visitor.readViewVars());
+              c.data.writeViewVars = std::move(visitor.writeViewVars());
+              c.data.arrayVars = std::move(visitor.arrayVars());
+              c.data.readArrayVars = std::move(visitor.readArrayVars());
+              c.data.writeArrayVars = std::move(visitor.writeArrayVars());
+              c.reduceOps = std::move(visitor.reduceOps());
+              c.reduceVar = visitor.reduceVar();
+              pmap_.emplace(stmt, std::move(c));
+            }
           }
         }
 
@@ -274,11 +303,21 @@ namespace clang{
       return fromDeviceArrays_;
     }
 
+    static ParallelConstruct& getParallelConstruct(const Stmt* stmt){
+      auto itr = pmap_.find(stmt);
+      assert(itr != pmap_.end() && "invalid parallel construct");
+      return itr->second;
+    }
+
   private:
+    static uint32_t nextParallelConstructId_;
+
     static DataMap toDeviceViews_;
     static DataMap fromDeviceViews_;
     static DataMap toDeviceArrays_;
     static DataMap fromDeviceArrays_;
+
+    static ParallelConstructMap pmap_;
   };
   
 } // end namespace clang

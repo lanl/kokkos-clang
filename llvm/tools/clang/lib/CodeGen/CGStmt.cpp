@@ -109,7 +109,7 @@ void CodeGenFunction::EmitParallelFor(const CallExpr* E,
   
   const Expr* n = E->getArg(0);
   
-  const LambdaExpr* le = GetLambda(E->getArg(1));
+  const LambdaExpr* le = PTXParallelConstructVisitor::GetLambda(E->getArg(1));
 
   assert(le && "expected a lambda");
   
@@ -222,22 +222,6 @@ void CodeGenFunction::EmitParallelFor(const CallExpr* E,
   }
 }
 
-const LambdaExpr* CodeGenFunction::GetLambda(const Expr* E){
-  if(auto me = dyn_cast<MaterializeTemporaryExpr>(E)){
-    E = me->GetTemporaryExpr();
-  }
-  
-  if(const CastExpr* c = dyn_cast<CastExpr>(E)){
-    E = c->getSubExpr();
-  }
-
-  if(const CXXBindTemporaryExpr* c = dyn_cast<CXXBindTemporaryExpr>(E)){
-    E = c->getSubExpr();
-  }
-
-  return dyn_cast<LambdaExpr>(E);
-}
-
 namespace{
 
   enum class ReduceType{
@@ -282,9 +266,14 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
   auto& R = CGM.getIdeasRuntime();
   LLVMContext& C = getLLVMContext();
 
-  const VarDecl* reduceVar;
+  const ParallelAnalysis::ParallelConstruct& pc = 
+    ParallelAnalysis::getParallelConstruct(E);
 
-  const LambdaExpr* le = GetLambda(E->getArg(1));
+  const ParallelAnalysis::Data& pd = pc.data;
+
+  const VarDecl* reduceVar = pc.reduceVar;
+
+  const LambdaExpr* le = PTXParallelConstructVisitor::GetLambda(E->getArg(1));
 
   assert(le && "expected a lambda");
   
@@ -323,30 +312,8 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
   const FunctionDecl* f = E->getDirectCallee();
   assert(f);
 
-  if(f->getQualifiedNameAsString() == "Kokkos::parallel_for"){
-    reduceVar = nullptr;
-    assert(md->getNumParams() == 1);
-    assert(E->getNumArgs() == 3);
-  }
-  else if(f->getQualifiedNameAsString() == "Kokkos::parallel_reduce"){
-    reduceVar = md->getParamDecl(1);
-    assert(md->getNumParams() == 2);
-    assert(E->getNumArgs() == 5); 
-  }
-  else{
-    assert(false && "expected parallel for or reduce");
-  }
-
   ParallelForInfo* parent;
   ParallelForInfo* info;
-
-  PTXParallelConstructVisitor::VarSet viewVars;
-  PTXParallelConstructVisitor::VarSet readViewVars;
-  PTXParallelConstructVisitor::VarSet writeViewVars;
-
-  PTXParallelConstructVisitor::VarSet arrayVars;
-  PTXParallelConstructVisitor::VarSet readArrayVars;
-  PTXParallelConstructVisitor::VarSet writeArrayVars;
 
   ReduceType reduceType = ReduceType::None;
 
@@ -356,19 +323,8 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
     parent = nullptr;
     info = visitor.getParallelForInfo();
 
-    PTXParallelConstructVisitor ptxVisitor(reduceVar);
-    ptxVisitor.Visit(const_cast<CallExpr*>(E));
-
-    viewVars = ptxVisitor.viewVars();
-    readViewVars = ptxVisitor.readViewVars();
-    writeViewVars = ptxVisitor.writeViewVars();
-
-    arrayVars = ptxVisitor.arrayVars();
-    readArrayVars = ptxVisitor.readArrayVars();
-    writeArrayVars = ptxVisitor.writeArrayVars();
-
     if(reduceVar){      
-      for(auto op : ptxVisitor.reduceOps()){
+      for(auto op : pc.reduceOps){
         if(auto bo = dyn_cast<BinaryOperator>(op)){
           if(bo->getOpcode() == BO_AddAssign){
             
@@ -430,7 +386,7 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
 
   TypeVec params;
 
-  for(const VarDecl* vd : viewVars){
+  for(const VarDecl* vd : pd.viewVars){
     CreateKokkosViewTypeInfo(vd);
 
     llvm::Type* t = ConvertType(viewInfoMap_[vd].elementType);
@@ -438,11 +394,11 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
     params.push_back(llvm::PointerType::get(Int32Ty, 0));
   }
 
-  for(const VarDecl* vd : writeViewVars){
+  for(const VarDecl* vd : pd.writeViewVars){
     GetOrCreateKokkosView(vd);
   }
 
-  for(const VarDecl* vd : arrayVars){
+  for(const VarDecl* vd : pd.arrayVars){
     CreateKokkosArrayTypeInfo(vd);
     
     const PointerType* pt = dyn_cast<PointerType>(vd->getType());
@@ -452,7 +408,7 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
     params.push_back(llvm::PointerType::get(t, 0));
   }
 
-  for(const VarDecl* vd : writeArrayVars){
+  for(const VarDecl* vd : pd.writeArrayVars){
     GetOrCreateKokkosArray(vd);
   }
 
@@ -495,7 +451,7 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
   
   Value* reduceArray;
 
-  for(const VarDecl* vd : viewVars){ 
+  for(const VarDecl* vd : pd.viewVars){ 
     aitr->setName(vd->getName());
     parallelForParamMap_[vd] = aitr;
     ++aitr;
@@ -511,7 +467,7 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
 
   auto aitrArray = aitr;
 
-  for(const VarDecl* vd : arrayVars){ 
+  for(const VarDecl* vd : pd.arrayVars){ 
     aitr->setName(vd->getName());
     ++aitr;
   }
@@ -581,7 +537,7 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
 
   B.SetInsertPoint(entry);
 
-  for(const VarDecl* vd : arrayVars){
+  for(const VarDecl* vd : pd.arrayVars){
     Value* varPtr = B.CreateAlloca(ConvertType(vd->getType()));
     B.CreateStore(aitrArray++, ideasAddr(varPtr));
     parallelForParamMap_[vd] = varPtr;
@@ -1071,14 +1027,14 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
 
   //ndump(ptx);
 
-  Constant* pc = ConstantDataArray::getString(C, ptx);
+  Constant* pcs = ConstantDataArray::getString(C, ptx);
   
   GlobalVariable* ptxGlobal = 
     new GlobalVariable(CGM.getModule(),
-                       pc->getType(),
+                       pcs->getType(),
                        true,
                        GlobalValue::PrivateLinkage,
-                       pc,
+                       pcs,
                        "ptx");
 
   Value* kernelId = ConstantInt::get(Int32Ty, nextKernelId_++);
@@ -1133,16 +1089,16 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
 
   B.SetInsertPoint(initBlock);
 
-  for(const VarDecl* vd : viewVars){
+  for(const VarDecl* vd : pd.viewVars){
     Value* viewPtr = GetOrCreateKokkosView(vd);
 
     uint32_t flags = 0;
 
-    if(readViewVars.find(vd) != readViewVars.end()){
+    if(pd.readViewVars.find(vd) != pd.readViewVars.end()){
       flags |= FLAG_READ;
     }
 
-    if(writeViewVars.find(vd) != writeViewVars.end()){
+    if(pd.writeViewVars.find(vd) != pd.writeViewVars.end()){
       flags |= FLAG_WRITE;
     }
 
@@ -1150,16 +1106,16 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
                  {kernelId, viewPtr, ConstantInt::get(Int32Ty, flags)});  
   }
 
-  for(const VarDecl* vd : arrayVars){
+  for(const VarDecl* vd : pd.arrayVars){
     Value* arrayPtr = GetOrCreateKokkosArray(vd);
     
     uint32_t flags = 0;
 
-    if(readArrayVars.find(vd) != readArrayVars.end()){
+    if(pd.readArrayVars.find(vd) != pd.readArrayVars.end()){
       flags |= FLAG_READ;
     }
 
-    if(writeArrayVars.find(vd) != writeArrayVars.end()){
+    if(pd.writeArrayVars.find(vd) != pd.writeArrayVars.end()){
       flags |= FLAG_WRITE;
     }
 
@@ -1176,7 +1132,7 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
     B.CreateCall(R.CudaAddKernelVarFunc(), {kernelId, varPtr});  
   }
 
-  for(const VarDecl* vd : arrayVars){
+  for(const VarDecl* vd : pd.arrayVars){
     parallelForParamMap_.erase(vd);
   }
 

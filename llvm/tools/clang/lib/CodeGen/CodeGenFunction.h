@@ -132,8 +132,6 @@ public:
   void EmitParallelConstructPTX(const CallExpr* E);
 
   void EmitParallelConstructPTX2(const CallExpr* E);
-
-  const LambdaExpr* GetLambda(const Expr* E);
   
   Address ideasAddr(llvm::Value* v){
     return Address(v, getPointerAlign());

@@ -60,5 +60,7 @@ namespace clang{
   ParallelAnalysis::DataMap ParallelAnalysis::fromDeviceViews_;
   ParallelAnalysis::DataMap ParallelAnalysis::toDeviceArrays_;
   ParallelAnalysis::DataMap ParallelAnalysis::fromDeviceArrays_;
+  ParallelAnalysis::ParallelConstructMap ParallelAnalysis::pmap_;
+  uint32_t ParallelAnalysis::nextParallelConstructId_ = 0;
 
 } // namespace clang
