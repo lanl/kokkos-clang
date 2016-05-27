@@ -60,9 +60,12 @@ public:
   using VarSet = std::set<const VarDecl*>;
 
   PTXParallelConstructVisitor()
-  : reduceVar_(nullptr){
-  
-  }
+  : reduceVar_(nullptr),
+  reduceVars_(nullptr){}
+
+  PTXParallelConstructVisitor(VarSet& reduceVars)
+  : reduceVar_(nullptr),
+  reduceVars_(&reduceVars){}
   
   void Run(const CallExpr* E){
     const LambdaExpr* le = PTXParallelConstructVisitor::GetLambda(E->getArg(1));
@@ -209,8 +212,16 @@ public:
 
     if(reduceVar_){
       if(auto dr = dyn_cast<DeclRefExpr>(S->getLHS())){
-        if(dr->getDecl() == reduceVar_){
-          reduceOps_.insert(S);
+        const VarDecl* vd = dyn_cast<VarDecl>(dr->getDecl());
+      
+        if(vd){
+          if(vd == reduceVar_){
+            reduceOps_.insert(S);
+          }
+
+          if(reduceVars_ && reduceVars_->find(vd) != reduceVars_->end()){
+            reducedVars_.insert(vd);
+          }
         }
       }
     }
@@ -276,6 +287,10 @@ public:
     return reduceVar_;
   }
 
+  VarSet& reducedVars(){
+    return reducedVars_;
+  }
+
 private:
   using ReduceOpSet = std::unordered_set<const Stmt*>;
 
@@ -288,7 +303,9 @@ private:
   VarSet arrayVars_;
   VarSet readArrayVars_;
   VarSet writeArrayVars_;
+  VarSet reducedVars_;  
   OpType opType_ = OpType::None;
+  VarSet* reduceVars_;
 };
 
 } // end namespace CodeGen

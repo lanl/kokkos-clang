@@ -112,6 +112,7 @@ namespace clang{
       VarSet arrayVars;
       VarSet readArrayVars;
       VarSet writeArrayVars;
+      std::vector<std::pair<const VarDecl*, ParallelConstruct*>> reduceVars;
       ParallelConstructSet parallelConstructs;
     };
 
@@ -248,6 +249,11 @@ namespace clang{
               c->reduceVar = visitor.reduceVar();
               pmap_.emplace(stmt, c);
               data.parallelConstructs.insert(c);
+
+              const VarDecl* rv = visitor.reduceVar();
+              if(rv){
+                data.reduceVars.push_back({rv, c});
+              }
             }
           }
         }
@@ -311,6 +317,26 @@ namespace clang{
               for(auto pc : rp){
                 data.parallelConstructs.erase(pc);
               }
+            }
+          }
+
+          for(auto vd : visitor.reducedVars()){
+            auto itr = data.reduceVars.begin();
+            bool found = false;
+            
+            while(itr != data.reduceVars.end()){
+              if(itr->first == vd){
+                data.reduceVars.erase(itr);
+                synchMap_.emplace(stmt, itr->second);
+                found = true;
+                break;
+              }
+
+              ++itr;
+            }
+            
+            if(found){
+              break;
             }
           }
 
