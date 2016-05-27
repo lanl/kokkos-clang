@@ -1035,7 +1035,7 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
                        pcs,
                        "ptx");
 
-  Value* kernelId = ConstantInt::get(Int32Ty, nextKernelId_++);
+  Value* kernelId = ConstantInt::get(Int32Ty, pc.id);
 
   Value* ptxStr = B.CreateBitCast(ptxGlobal, VoidPtrTy);
 

@@ -169,7 +169,7 @@ namespace clang{
             
             VarSet remove;
 
-            const VarDecl* insertStmt = 
+            const Stmt* insertStmt = 
               lastKokkosStmt ? lastKokkosStmt : lastStmt;
 
             for(auto vd : data.writeViewVars){

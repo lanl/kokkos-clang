@@ -1107,7 +1107,6 @@ private:
 
   // +===== ideas
   std::vector<ParallelForInfo*> parallelForStack_;
-  uint32_t nextKernelId_ = 0;
   std::map<const VarDecl*, llvm::Value*> parallelForParamMap_; 
   std::map<const VarDecl*, llvm::Value*> parallelForParamDimMap_;
   std::map<const VarDecl*, ViewInfo> viewInfoMap_;
