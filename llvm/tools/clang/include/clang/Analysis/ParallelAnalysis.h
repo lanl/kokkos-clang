@@ -52,6 +52,8 @@
  * ##### 
  */
 
+// +===== ideas
+
 #include "clang/Analysis/CFG.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
@@ -98,14 +100,21 @@ namespace clang{
     struct ParallelConstruct{
       using ReduceOpSet = std::unordered_set<const Stmt*>;
 
-      ReduceOpSet reduceOps;
       uint32_t id;
-      Data data;
+      ReduceOpSet reduceOps;
+      VarSet viewVars;
+      VarSet readViewVars;
+      VarSet writeViewVars;
+      VarSet arrayVars;
+      VarSet readArrayVars;
+      VarSet writeArrayVars;
       const VarDecl* reduceVar;
     };
 
+    using SynchMap = std::unordered_map<const Stmt*, ParallelConstruct*>;
+
     using ParallelConstructMap = 
-      std::unordered_map<const Stmt*, ParallelConstruct>;
+      std::unordered_map<const Stmt*, ParallelConstruct*>;
 
     typedef std::unordered_set<CFGBlock*> BlockSet;
     
@@ -192,17 +201,17 @@ namespace clang{
 
             auto pitr = pmap_.find(stmt);
             if(pitr == pmap_.end()){
-              ParallelConstruct c;
-              c.id = nextParallelConstructId_++;
-              c.data.viewVars = std::move(visitor.viewVars());
-              c.data.readViewVars = std::move(visitor.readViewVars());
-              c.data.writeViewVars = std::move(visitor.writeViewVars());
-              c.data.arrayVars = std::move(visitor.arrayVars());
-              c.data.readArrayVars = std::move(visitor.readArrayVars());
-              c.data.writeArrayVars = std::move(visitor.writeArrayVars());
-              c.reduceOps = std::move(visitor.reduceOps());
-              c.reduceVar = visitor.reduceVar();
-              pmap_.emplace(stmt, std::move(c));
+              auto c = new ParallelConstruct;
+              c->id = nextParallelConstructId_++;
+              c->viewVars = std::move(visitor.viewVars());
+              c->readViewVars = std::move(visitor.readViewVars());
+              c->writeViewVars = std::move(visitor.writeViewVars());
+              c->arrayVars = std::move(visitor.arrayVars());
+              c->readArrayVars = std::move(visitor.readArrayVars());
+              c->writeArrayVars = std::move(visitor.writeArrayVars());
+              c->reduceOps = std::move(visitor.reduceOps());
+              c->reduceVar = visitor.reduceVar();
+              pmap_.emplace(stmt, c);
             }
           }
         }
@@ -303,7 +312,7 @@ namespace clang{
       return fromDeviceArrays_;
     }
 
-    static ParallelConstruct& getParallelConstruct(const Stmt* stmt){
+    static ParallelConstruct* getParallelConstruct(const Stmt* stmt){
       auto itr = pmap_.find(stmt);
       assert(itr != pmap_.end() && "invalid parallel construct");
       return itr->second;
@@ -316,6 +325,7 @@ namespace clang{
     static DataMap fromDeviceViews_;
     static DataMap toDeviceArrays_;
     static DataMap fromDeviceArrays_;
+    static SynchMap synchMap_;
 
     static ParallelConstructMap pmap_;
   };
