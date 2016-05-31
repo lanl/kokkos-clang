@@ -116,7 +116,7 @@ namespace clang{
       ParallelConstructSet parallelConstructs;
     };
 
-    using SynchMap = std::multimap<const Stmt*, ParallelConstruct*>;
+    using SynchStmtsVec = std::vector<std::pair<const Stmt*, ParallelConstruct*>>;
 
     using ParallelConstructMap = 
       std::unordered_map<const Stmt*, ParallelConstruct*>;
@@ -154,8 +154,6 @@ namespace clang{
 
         const Stmt* stmt = o.getValue().getStmt();
 
-        CodeGen::PTXParallelConstructVisitor visitor;
-
         bool isParallelConstruct = false;
 
         if(const CallExpr* ce = dyn_cast<CallExpr>(stmt)){
@@ -166,6 +164,8 @@ namespace clang{
                    f->getQualifiedNameAsString() == "Kokkos::parallel_reduce")){
 
             isParallelConstruct = true;
+
+            CodeGen::PTXParallelConstructVisitor visitor;
 
             visitor.Run(ce);
             
@@ -210,7 +210,7 @@ namespace clang{
 
               for(ParallelConstruct* pc : data.parallelConstructs){
                 if(pc->writeViewVars.find(vd) != pc->writeViewVars.end()){
-                  synchMap_.emplace(insertStmt, pc);
+                  synchStmts_.push_back({insertStmt, pc});
                   rp.insert(pc);
                 }
               }
@@ -225,7 +225,7 @@ namespace clang{
 
               for(ParallelConstruct* pc : data.parallelConstructs){
                 if(pc->writeArrayVars.find(vd) != pc->writeArrayVars.end()){
-                  synchMap_.emplace(insertStmt, pc);
+                  synchStmts_.push_back({insertStmt, pc});
                   rp.insert(pc);
                 }
               }
@@ -250,15 +250,27 @@ namespace clang{
               pmap_.emplace(stmt, c);
               data.parallelConstructs.insert(c);
 
-              const VarDecl* rv = visitor.reduceVar();
-              if(rv){
-                data.reduceVars.push_back({rv, c});
+              if(f->getQualifiedNameAsString() == "Kokkos::parallel_reduce"){
+                auto dr = dyn_cast<DeclRefExpr>(ce->getArg(2));
+                assert(dr && "failed to get reduce result decl");
+
+                auto vd = dyn_cast<VarDecl>(dr->getDecl());
+                assert(vd && "expected a var decl");
+
+                data.reduceVars.push_back({vd, c});
               }
             }
           }
         }
 
         if(!isParallelConstruct){
+          VarSet rs;
+          for(auto ri : data.reduceVars){
+            rs.insert(ri.first);
+          }
+
+          CodeGen::PTXParallelConstructVisitor visitor(rs);
+
           visitor.Visit(const_cast<Stmt*>(stmt));
 
           bool found = !(visitor.writeViewVars().empty() &&
@@ -282,7 +294,7 @@ namespace clang{
 
               for(ParallelConstruct* pc : data.parallelConstructs){
                 if(pc->writeViewVars.find(vd) != pc->writeViewVars.end()){
-                  synchMap_.emplace(stmt, pc);
+                  synchStmts_.push_back({stmt, pc});                  
                   rp.insert(pc);
                 }
               }
@@ -309,7 +321,7 @@ namespace clang{
 
               for(ParallelConstruct* pc : data.parallelConstructs){
                 if(pc->writeArrayVars.find(vd) != pc->writeArrayVars.end()){
-                  synchMap_.emplace(stmt, pc);
+                  synchStmts_.push_back({stmt, pc});                  
                   rp.insert(pc);
                 }
               }
@@ -327,7 +339,7 @@ namespace clang{
             while(itr != data.reduceVars.end()){
               if(itr->first == vd){
                 data.reduceVars.erase(itr);
-                synchMap_.emplace(stmt, itr->second);
+                synchStmts_.push_back({stmt, itr->second});                  
                 found = true;
                 break;
               }
@@ -406,8 +418,8 @@ namespace clang{
       return itr->second;
     }
 
-    static SynchMap& synchMap(){
-      return synchMap_;
+    static SynchStmtsVec& synchStmts(){
+      return synchStmts_;
     }
 
   private:
@@ -417,7 +429,7 @@ namespace clang{
     static DataMap fromDeviceViews_;
     static DataMap toDeviceArrays_;
     static DataMap fromDeviceArrays_;
-    static SynchMap synchMap_;
+    static SynchStmtsVec synchStmts_;
 
     static ParallelConstructMap pmap_;
   };

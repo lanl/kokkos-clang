@@ -151,7 +151,12 @@ public:
             }
           }
         }
-      }      
+      }
+
+      if(reduceVars_ && reduceVars_->find(vd) != reduceVars_->end()){
+        reducedVars_.insert(vd);
+      }
+
     } 
   }
 
@@ -172,9 +177,21 @@ public:
     VisitChildren(E);
   }
 
+/*
+  void VisitImplicitCastExpr(ImplicitCastExpr* E){
+    VisitChildren(E);
+  }
+  */
+
   void VisitCallExpr(CallExpr* E){
     VisitChildren(E);
   }
+
+/*
+  void VisitCXXOperatorCallExpr(CXXOperatorCallExpr* E){
+    VisitChildren(E);
+  }
+  */
   
   void VisitDeclStmt(DeclStmt* S){
     const VarDecl* vd = dyn_cast_or_null<const VarDecl>(S->getSingleDecl());
@@ -183,8 +200,13 @@ public:
       return;
     }
 
+    const Expr* init = vd->getInit();
+    if(!init){
+      return;
+    }
+
     opType_ = OpType::RHS;
-    Visit(const_cast<Expr*>(vd->getInit()));
+    Visit(const_cast<Expr*>(init));
     opType_ = OpType::None;
   }
 
@@ -217,10 +239,6 @@ public:
         if(vd){
           if(vd == reduceVar_){
             reduceOps_.insert(S);
-          }
-
-          if(reduceVars_ && reduceVars_->find(vd) != reduceVars_->end()){
-            reducedVars_.insert(vd);
           }
         }
       }

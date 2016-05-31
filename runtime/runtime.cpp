@@ -674,23 +674,24 @@ namespace{
         lastSize_ = n;
 
         // ndm - fix
+        /*
         if(reduceRetPtr_){
           cuStreamSynchronize(stream_);
 
           reduce(hostPtr_, reducePtr_, gridDimX_, reduceSize_, reduceFloat_,
                  reduceSigned_, reduceSum_, reduceRetPtr_);
-        }        
+        }
+        */ 
+
       }
 
       void await(){
         cuStreamSynchronize(stream_);
 
-        /*
         if(reduceRetPtr_){
           reduce(hostPtr_, reducePtr_, gridDimX_, reduceSize_, reduceFloat_,
                  reduceSigned_, reduceSum_, reduceRetPtr_);
         }
-        */
       }
 
       void run2(uint32_t n, void* reduceRetPtr){
@@ -816,6 +817,7 @@ namespace{
                     bool reduceFloat,
                     bool reduceSigned,
                     bool reduceSum){ 
+
       auto itr = kernelMap_.find(kernelId);
       if(itr != kernelMap_.end()){
         return true;

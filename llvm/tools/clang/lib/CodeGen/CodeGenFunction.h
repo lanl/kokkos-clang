@@ -150,6 +150,8 @@ public:
   void CopyKokkosDataFromDevice(const Stmt* S);
 
   void KokkosSynchronize(const Stmt* S);
+  
+  bool KokkosContains(const Stmt* Parent, const Stmt* S);
 
   // +==============================================
   

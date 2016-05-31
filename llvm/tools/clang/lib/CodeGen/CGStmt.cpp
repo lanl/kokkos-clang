@@ -2037,6 +2037,28 @@ void CodeGenFunction::CopyKokkosDataFromDevice(const Stmt* S){
 }
 
 // +====== ideas =============================
+bool CodeGenFunction::KokkosContains(const Stmt* Parent, const Stmt* S){
+  if(isa<CompoundStmt>(Parent)){
+    return false;
+  }
+
+  if(Parent == S){
+    return true;
+  }
+
+  for(auto ci : Parent->children()){
+    if(!ci){
+      continue;
+    }
+
+    if(KokkosContains(ci, S)){
+      return true;
+    }
+  }
+
+  return false;
+}
+
 void CodeGenFunction::KokkosSynchronize(const Stmt *S){
   if(isMainStmt(S)){
     using namespace llvm;
@@ -2049,12 +2071,22 @@ void CodeGenFunction::KokkosSynchronize(const Stmt *S){
     auto& R = CGM.getIdeasRuntime();
     LLVMContext& C = getLLVMContext();
 
-    auto sm = ParallelAnalysis::synchMap();
-    auto p = sm.equal_range(S);
-    for(auto itr = p.first, itrEnd = p.second; itr != itrEnd; ++itr){
+    auto& sv = ParallelAnalysis::synchStmts();
+
+    auto itr = sv.begin();
+    while(itr != sv.end()){
       auto pc = itr->second;
-      ValueVec args = {ConstantInt::get(Int32Ty, pc->id)};
-      B.CreateCall(R.CudaAwaitKernelFunc(), args);  
+      const Stmt* stmt = itr->first;
+     
+      if(KokkosContains(S, stmt)){
+        ValueVec args = {ConstantInt::get(Int32Ty, pc->id)};
+        B.CreateCall(R.CudaAwaitKernelFunc(), args);
+        itr = sv.erase(itr);
+        break;
+      }
+      else{
+        ++itr;
+      }  
     }
   }  
 }
