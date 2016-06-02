@@ -133,6 +133,8 @@ public:
 
   void EmitParallelConstructPTX2(const CallExpr* E);
   
+  void EmitParallelConstructPTX3(const CallExpr* E);
+  
   Address ideasAddr(llvm::Value* v){
     return Address(v, getPointerAlign());
   }

@@ -638,7 +638,7 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
   }
 
   //llvm::errs() << "---------------- kernel func\n";
-  //func->dump();
+  func->dump();
 
   // =========================== REDUCE FUNCTION
   if(reduceVar){
@@ -1760,6 +1760,618 @@ void CodeGenFunction::EmitParallelConstructPTX2(const CallExpr* E){
 
   //ndump(ptx);
   */ 
+}
+
+void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
+  using namespace llvm;
+  using namespace std;
+
+  using ValueVec = vector<Value*>;
+  using TypeVec = vector<llvm::Type*>;
+  
+  auto& B = Builder;
+  auto& R = CGM.getIdeasRuntime();
+  LLVMContext& C = getLLVMContext();
+
+  const ParallelAnalysis::ParallelConstruct& pc = 
+    *ParallelAnalysis::getParallelConstruct(E);
+
+  const VarDecl* reduceVar = pc.reduceVar;
+
+  const LambdaExpr* le = PTXParallelConstructVisitor::GetLambda(E->getArg(1));
+
+  assert(le && "expected a lambda");
+  
+  vector<const VarDecl*> captureVars;
+
+  for(auto ci : le->captures()){
+    bool shouldCapture = true;
+
+    const VarDecl* vd = ci.getCapturedVar();
+
+    QualType ct = vd->getType().getCanonicalType();
+
+    if(const RecordType* rt = dyn_cast<RecordType>(ct.getTypePtr())){
+      (void)rt;
+      if(ct.getAsString().find("class Kokkos::View") == 0){
+        shouldCapture = false;
+      }
+    }
+    else if(const PointerType* pt = dyn_cast<PointerType>(ct.getTypePtr())){
+      (void)pt;
+
+      if(auto ne = dyn_cast_or_null<CXXNewExpr>(vd->getInit())){
+        if(ne->isArray()){
+          shouldCapture = false;
+        }
+      }
+    }
+
+    if(shouldCapture){
+      captureVars.push_back(vd);
+    }
+  } 
+
+  CXXMethodDecl* md = le->getCallOperator();
+
+  const FunctionDecl* f = E->getDirectCallee();
+  assert(f);
+
+  ParallelForInfo* parent;
+  ParallelForInfo* info;
+
+  ReduceType reduceType = ReduceType::None;
+
+  if(parallelForStack_.empty()){
+    ParallelForVisitor visitor;
+    visitor.Visit(const_cast<CallExpr*>(E));
+    parent = nullptr;
+    info = visitor.getParallelForInfo();
+
+    if(reduceVar){      
+      for(auto op : pc.reduceOps){
+        if(auto bo = dyn_cast<BinaryOperator>(op)){
+          if(bo->getOpcode() == BO_AddAssign){
+            
+            assert(reduceType == ReduceType::None || 
+                   reduceType == ReduceType::Sum);
+            
+            reduceType = ReduceType::Sum;
+          }
+          else if(bo->getOpcode() == BO_MulAssign){
+
+            assert(reduceType == ReduceType::None || 
+                   reduceType == ReduceType::Product);
+
+            reduceType = ReduceType::Product;
+          }
+          else{
+            assert(false && "invalid reduce type");
+          }
+        }
+        else if(auto uo = dyn_cast<UnaryOperator>(op)){
+          (void)uo;
+          assert(reduceType == ReduceType::None || 
+                 reduceType == ReduceType::Sum);
+          
+          reduceType = ReduceType::Sum;
+        }
+      }
+
+      assert(reduceType != ReduceType::None && "failed to find reduce operator");
+    }
+  }
+  else{
+    parent = parallelForStack_.back();
+
+    for(auto i : parent->children){
+      if(i->callExpr == E){
+        info = i;
+        break;
+      }
+    }
+    assert(info);
+  }
+
+  parallelForStack_.push_back(info);
+
+  BasicBlock* startBlock = B.GetInsertBlock(); 
+  BasicBlock::iterator startPoint = B.GetInsertPoint();
+  Function* startFunc = startBlock->getParent(); 
+    
+  Value* nv = EmitScalarExpr(E->getArg(0));
+
+  nv = B.CreateTrunc(nv, Int32Ty);
+
+  CompoundStmt* body = le->getBody();
+  
+  ParmVarDecl* indexVar = md->getParamDecl(0);
+
+  //llvm::Type* indexType = ConvertType(indexVar->getType());
+
+  TypeVec params;
+
+  for(const VarDecl* vd : pc.viewVars){
+    CreateKokkosViewTypeInfo(vd);
+
+    llvm::Type* t = ConvertType(viewInfoMap_[vd].elementType);
+    params.push_back(llvm::PointerType::get(t, 0));
+    params.push_back(llvm::PointerType::get(Int32Ty, 0));
+  }
+
+  for(const VarDecl* vd : pc.writeViewVars){
+    GetOrCreateKokkosView(vd);
+  }
+
+  for(const VarDecl* vd : pc.arrayVars){
+    CreateKokkosArrayTypeInfo(vd);
+    
+    const PointerType* pt = dyn_cast<PointerType>(vd->getType());
+    assert(pt);
+
+    llvm::Type* t = ConvertType(pt->getPointeeType());
+    params.push_back(llvm::PointerType::get(t, 0));
+  }
+
+  for(const VarDecl* vd : pc.writeArrayVars){
+    GetOrCreateKokkosArray(vd);
+  }
+
+  for(const VarDecl* vd : captureVars){
+    llvm::Type* t = ConvertType(vd->getType());
+    params.push_back(t);
+  }
+
+  llvm::FunctionType* ft;
+
+  llvm::StructType* reductStruct;
+
+  if(reduceVar){
+    llvm::Type* rt = ConvertType(reduceVar->getType().getNonReferenceType());
+
+    TypeVec reduceParams;
+    reduceParams.push_back(Int32Ty);
+    reduceParams.push_back(VoidPtrTy);
+
+    ft = llvm::FunctionType::get(rt, reduceParams, false);
+
+    reductStruct = llvm::StructType::create(params);
+  }
+  else{
+    params.push_back(Int32Ty);
+
+    ft = llvm::FunctionType::get(VoidTy, params, false);
+  }
+
+  llvm::Module ptxModule("PTXModule", C);
+  CGIdeasRuntime KR(ptxModule);
+
+  llvm::Function* func =
+    llvm::Function::Create(ft,
+                           llvm::Function::ExternalLinkage,
+                           "run",
+                           &ptxModule);
+
+  //func->dump();
+
+  BasicBlock* entry = createBasicBlock("entry", func);
+
+  auto prevAllocaInsertPt = AllocaInsertPt;
+
+  llvm::Value* Undef = llvm::UndefValue::get(Int32Ty);
+  AllocaInsertPt = new llvm::BitCastInst(Undef, Int32Ty, "", entry);
+
+  B.SetInsertPoint(entry);
+
+  Value* reducePtr2;
+
+  parallelForParamMap_.clear();
+
+  if(reduceVar){
+    auto aitr = func->arg_begin();
+    aitr->setName("index");
+    ++aitr;
+    aitr->setName("args");
+    
+    Value* args = 
+      B.CreateBitCast(aitr, llvm::PointerType::get(reductStruct, 0));
+
+    size_t field = 0;
+
+    for(const VarDecl* vd : pc.viewVars){       
+      Value* viewPtr = B.CreateStructGEP(nullptr, args, field++);  
+      viewPtr = B.CreateLoad(ideasAddr(viewPtr));
+      parallelForParamMap_[vd] = viewPtr;
+
+      Value* dimsPtr = B.CreateStructGEP(nullptr, args, field++);  
+      dimsPtr = B.CreateLoad(ideasAddr(dimsPtr));
+      parallelForParamDimMap_[vd] = dimsPtr;
+    }
+
+    for(const VarDecl* vd : pc.arrayVars){
+      Value* arrayPtr = B.CreateStructGEP(nullptr, args, field++);  
+      arrayPtr = B.CreateLoad(ideasAddr(arrayPtr));
+      parallelForParamMap_[vd] = arrayPtr;
+    }
+
+    for(const VarDecl* vd : captureVars){
+      Value* capturePtr = B.CreateStructGEP(nullptr, args, field++);  
+      parallelForParamMap_[vd] = capturePtr;
+    }
+    
+    llvm::Type* pt = ConvertType(reduceVar->getType());
+    llvm::Type* t = ConvertType(reduceVar->getType().getNonReferenceType());
+
+    reducePtr2 = B.CreateAlloca(pt);
+    Value* ptr5 = B.CreateAlloca(t);
+    B.CreateStore(ptr5, ideasAddr(reducePtr2));
+    Value* indexPtr = B.CreateAlloca(Int32Ty);
+
+    Value* initVal;
+    
+    if(t->isFloatingPointTy()){
+      if(reduceType == ReduceType::Sum){
+        initVal = ConstantFP::get(t, 0.0);
+      }
+      else if(reduceType == ReduceType::Product){
+        initVal = ConstantFP::get(t, 1.0);
+      }
+      else{
+        assert(false && "invalid reduce type");
+      }
+    }
+    else{
+      if(reduceType == ReduceType::Sum){
+        initVal = ConstantInt::get(t, 0);
+      }
+      else if(reduceType == ReduceType::Product){
+        initVal = ConstantInt::get(t, 1);
+      }
+      else{
+        assert(false && "invalid reduce type");
+      }
+    }
+
+    Value* reducePtr = B.CreateLoad(ideasAddr(reducePtr2));
+    B.CreateStore(initVal, ideasAddr(reducePtr));
+    setAddrOfLocalVar(reduceVar, ideasAddr(reducePtr2));
+
+    setAddrOfLocalVar(indexVar, ideasAddr(indexPtr));  
+  }
+  else{
+    auto aitr = func->arg_begin();
+    
+    Value* reduceArray;
+
+    for(const VarDecl* vd : pc.viewVars){ 
+      aitr->setName(vd->getName());
+      parallelForParamMap_[vd] = aitr;
+      ++aitr;
+
+      string pn = vd->getName();
+      pn += ".dims";
+        
+      aitr->setName(pn);
+
+      parallelForParamDimMap_[vd] = aitr;
+      ++aitr;
+    }
+
+    auto aitrArray = aitr;
+
+    for(const VarDecl* vd : pc.arrayVars){ 
+      aitr->setName(vd->getName());
+      ++aitr;
+    }
+
+    auto aitrCapture = aitr;
+
+    for(const VarDecl* vd : captureVars){
+      aitr->setName(vd->getName());
+      ++aitr;
+    }
+
+    Value* count;
+    if(reduceVar){
+      aitr->setName("index");
+    }
+    else{
+      count = aitr;
+      aitr->setName("n");
+      ++aitr;
+    }
+
+    for(const VarDecl* vd : pc.arrayVars){
+      Value* varPtr = B.CreateAlloca(ConvertType(vd->getType()));
+      B.CreateStore(aitrArray++, ideasAddr(varPtr));
+      parallelForParamMap_[vd] = varPtr;
+    }
+
+    for(const VarDecl* vd : captureVars){
+      Value* varPtr = B.CreateAlloca(ConvertType(vd->getType()));
+      B.CreateStore(aitrCapture++, ideasAddr(varPtr));
+      parallelForParamMap_[vd] = varPtr;
+    }
+
+    Value* threadIdx = B.CreateCall(KR.getSREGFunc("tid.x"));
+    Value* blockIdx = B.CreateCall(KR.getSREGFunc("ctaid.x"));
+    Value* blockDim = B.CreateCall(KR.getSREGFunc("ntid.x"));
+
+    Value* threadId = 
+      B.CreateAdd(threadIdx, B.CreateMul(blockIdx, blockDim), "threadId");
+
+    Value* cond = 
+      B.CreateICmpUGT(threadId, count, "cond");
+
+    BasicBlock* RetBlock = createBasicBlock("parallel_for.ret", func);
+
+    BasicBlock* ContBlock = createBasicBlock("parallel_for.cont", func);
+
+    B.CreateCondBr(cond, RetBlock, ContBlock);
+    
+    B.SetInsertPoint(RetBlock);
+
+    B.CreateRetVoid();
+
+    B.SetInsertPoint(ContBlock);
+
+    Address threadIdPtr = 
+    ideasAddr(B.CreateAlloca(threadId->getType(), nullptr, "threadId.ptr"));
+
+    B.CreateStore(threadId, threadIdPtr);
+
+    setAddrOfLocalVar(indexVar, threadIdPtr);
+  }
+  
+  llvm::Function* prevFn = CurFn;
+  CurFn = func;
+
+  ReturnBlock = getJumpDestInCurrentScope("return");
+
+  EmitStmt(body);
+
+  if(reduceVar){
+    Value* retPtr = B.CreateLoad(ideasAddr(reducePtr2));
+    Value* ret = B.CreateLoad(ideasAddr(retPtr));
+    B.CreateRet(ret);
+  }
+  else{
+    B.CreateRetVoid();
+  }
+
+  //llvm::errs() << "---------------- kernel func\n";
+  func->dump();
+
+  //reduceFunc->dump();
+
+  // ===========================================
+
+  CurFn = prevFn;
+  B.SetInsertPoint(startBlock, startPoint);
+
+  AllocaInsertPt = prevAllocaInsertPt;
+
+  NamedMDNode* annotations = 
+    ptxModule.getOrInsertNamedMetadata("nvvm.annotations");
+  
+  SmallVector<Metadata*, 3> av;
+
+  av.push_back(ValueAsMetadata::get(func));    
+
+  av.push_back(MDString::get(ptxModule.getContext(), "kernel"));
+  av.push_back(ValueAsMetadata::get(llvm::ConstantInt::get(KR.Int32Ty, 1)));
+
+  annotations->addOperand(MDNode::get(ptxModule.getContext(), av));
+
+  //llvm::errs() << "---------------------- ptx module\n";
+  //ptxModule.dump();
+
+  const llvm::Target* target = nullptr;
+
+  for(TargetRegistry::iterator itr =  TargetRegistry::targets().begin(),
+      itrEnd =  TargetRegistry::targets().end(); itr != itrEnd; ++itr){
+    if(string(itr->getName()) == "nvptx64"){
+      target = &*itr;
+    }
+  }
+
+  assert(target && "failed to find NVPTX target");
+
+  Triple triple(sys::getDefaultTargetTriple());
+  triple.setArch(Triple::nvptx64);
+    
+  TargetMachine* targetMachine =  
+      target->createTargetMachine(triple.getTriple(),
+                                  //"sm_35",
+                                  "sm_35",
+                                  "",
+                                  llvm::TargetOptions(),
+                                  Reloc::Default,
+                                  CodeModel::Default,
+                                  CodeGenOpt::Aggressive);
+
+  DataLayout layout("e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:"
+    "64:64-f32:32:32-f64:64:64-v16:16:16-v32:32:32-v64:"
+    "64:64-v128:128:128-n16:32:64");
+
+  ptxModule.setDataLayout(layout);
+
+  llvm::legacy::PassManager* passManager = new legacy::PassManager;
+
+  passManager->add(createVerifierPass());
+
+  StringMap<int> ReflectParams;
+  ReflectParams["__CUDA_FTZ"] = 1;
+  passManager->add(createNVVMReflectPass(ReflectParams));
+
+  passManager->add(createInstructionCombiningPass());
+  passManager->add(createReassociatePass());
+  passManager->add(createGVNPass());
+  passManager->add(createCFGSimplificationPass());
+  //passManager->add(createSLPVectorizePass());
+  passManager->add(createBreakCriticalEdgesPass());
+  passManager->add(createConstantPropagationPass());
+  passManager->add(createDeadInstEliminationPass());
+  passManager->add(createDeadStoreEliminationPass());
+  passManager->add(createInstructionCombiningPass());
+  passManager->add(createCFGSimplificationPass());
+
+  SmallVector<char, 65536> buf;
+  raw_svector_ostream ostr(buf);
+  
+  bool fail =
+  targetMachine->addPassesToEmitFile(*passManager,
+                                     ostr,
+                                     TargetMachine::CGFT_AssemblyFile,
+                                     false);
+
+  assert(!fail);
+  
+  passManager->run(ptxModule);
+      
+  delete passManager;
+
+  string ptx = ostr.str().str();
+
+  //ndump(ptx);
+
+  Constant* pcs = ConstantDataArray::getString(C, ptx);
+  
+  GlobalVariable* ptxGlobal = 
+    new GlobalVariable(CGM.getModule(),
+                       pcs->getType(),
+                       true,
+                       GlobalValue::PrivateLinkage,
+                       pcs,
+                       "ptx");
+
+  Value* kernelId = ConstantInt::get(Int32Ty, pc.id);
+
+  Value* ptxStr = B.CreateBitCast(ptxGlobal, VoidPtrTy);
+
+  ValueVec args = {kernelId, ptxStr};
+
+  llvm::Type* i1Ty = llvm::IntegerType::getInt1Ty(C);
+
+  Constant* falseVal = ConstantInt::get(i1Ty, 0);
+  Constant* trueVal = ConstantInt::get(i1Ty, 1);
+
+  if(reduceVar){
+    QualType t = reduceVar->getType().getNonReferenceType();
+
+    size_t bytes = ConvertType(t)->getPrimitiveSizeInBits()/8;
+
+    args.push_back(ConstantInt::get(Int32Ty, bytes));
+
+    if(ConvertType(t)->isFloatingPointTy()){
+      args.push_back(trueVal);
+      args.push_back(falseVal);
+    }
+    else{
+      args.push_back(falseVal);
+      if(t.getTypePtr()->isSignedIntegerType()){
+        args.push_back(trueVal);
+      }
+    }
+
+    if(reduceType == ReduceType::Sum){
+      args.push_back(trueVal);
+    }
+    else{
+      args.push_back(falseVal);
+    }
+  }
+  else{
+    args.push_back(ConstantInt::get(Int32Ty, 0));
+    args.push_back(falseVal);
+    args.push_back(falseVal);
+    args.push_back(falseVal);
+  }
+
+  Value* ready = B.CreateCall(R.CudaInitKernelFunc(), args);
+
+  BasicBlock* initBlock = createBasicBlock("parallel_for.init", startFunc);
+  BasicBlock* readyBlock = createBasicBlock("parallel_for.ready", startFunc);
+
+  B.CreateCondBr(ready, readyBlock, initBlock);
+
+  B.SetInsertPoint(initBlock);
+
+  for(const VarDecl* vd : pc.viewVars){
+    Value* viewPtr = GetOrCreateKokkosView(vd);
+
+    uint32_t flags = 0;
+
+    if(pc.readViewVars.find(vd) != pc.readViewVars.end()){
+      flags |= FLAG_READ;
+    }
+
+    if(pc.writeViewVars.find(vd) != pc.writeViewVars.end()){
+      flags |= FLAG_WRITE;
+    }
+
+    B.CreateCall(R.CudaAddKernelViewFunc(),
+                 {kernelId, viewPtr, ConstantInt::get(Int32Ty, flags)});  
+  }
+
+  for(const VarDecl* vd : pc.arrayVars){
+    Value* arrayPtr = GetOrCreateKokkosArray(vd);
+    
+    uint32_t flags = 0;
+
+    if(pc.readArrayVars.find(vd) != pc.readArrayVars.end()){
+      flags |= FLAG_READ;
+    }
+
+    if(pc.writeArrayVars.find(vd) != pc.writeArrayVars.end()){
+      flags |= FLAG_WRITE;
+    }
+
+    B.CreateCall(R.CudaAddKernelArrayFunc(),
+                 {kernelId, arrayPtr, ConstantInt::get(Int32Ty, flags)});  
+  }
+
+  for(const VarDecl* vd : captureVars){
+    auto itr = LocalDeclMap.find(vd);
+    assert(itr != LocalDeclMap.end());
+
+    Value* varPtr = B.CreateBitCast(itr->second.getPointer(), VoidPtrTy);
+
+    B.CreateCall(R.CudaAddKernelVarFunc(), {kernelId, varPtr});  
+  }
+
+  for(const VarDecl* vd : pc.arrayVars){
+    parallelForParamMap_.erase(vd);
+  }
+
+  B.CreateBr(readyBlock);
+
+  B.SetInsertPoint(readyBlock);
+
+  args = {kernelId, nv};
+
+  if(reduceVar){
+    auto dr = dyn_cast<DeclRefExpr>(E->getArg(2));
+    assert(dr && "failed to get reduce result decl");
+
+    auto itr = LocalDeclMap.find(dr->getDecl());
+    assert(itr != LocalDeclMap.end());
+
+    Value* reduceRetPtr = B.CreateBitCast(itr->second.getPointer(), VoidPtrTy);
+    args.push_back(reduceRetPtr);
+  }
+  else{
+    args.push_back(ConstantPointerNull::get(VoidPtrTy));
+  }
+
+  B.CreateCall(R.CudaRunKernelFunc(), args);
+
+  parallelForStack_.pop_back();
+
+  //llvm::errs() << "---------------------- host module\n";
+  //CGM.getModule().dump();
+
+  //ndump(ptx); 
 }
 
 // ===========================================
