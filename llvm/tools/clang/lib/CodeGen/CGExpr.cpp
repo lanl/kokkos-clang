@@ -3494,7 +3494,8 @@ RValue CodeGenFunction::EmitCallExpr(const CallExpr *E,
       if(f->getQualifiedNameAsString() == "Kokkos::parallel_for" ||
          f->getQualifiedNameAsString() == "Kokkos::parallel_reduce"){
         //EmitParallelFor(E, PFK_Threads);
-        EmitParallelConstructPTX(E);
+        //EmitParallelConstructPTX(E);
+        EmitParallelConstructPTX3(E);
         return RValue::get(nullptr);
       }
     }
