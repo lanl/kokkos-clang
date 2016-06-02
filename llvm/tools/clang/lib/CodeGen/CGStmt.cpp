@@ -47,6 +47,7 @@
 #include "clang/Analysis/ParallelAnalysis.h"
 
 #include <unordered_set>
+#include <fstream>
 
 namespace llvm{
   extern ModulePass* createNVVMReflectPass(const StringMap<int>& Mapping);
@@ -2140,7 +2141,7 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
   }
 
   //llvm::errs() << "---------------- kernel func\n";
-  func->dump();
+  //func->dump();
 
   //reduceFunc->dump();
 
@@ -2233,7 +2234,18 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
 
   string ptx = ostr.str().str();
 
-  //ndump(ptx);
+  SourceManager& sm = CGM.getContext().getSourceManager();
+  string cppName = sm.getFilename(E->getLocStart());
+
+  size_t pos = cppName.rfind(".");
+  assert(pos != string::npos && "no file extension");
+  string ptxName = cppName.substr(0, pos);
+  ptxName += ".ptx";
+
+  ofstream fstr;
+  fstr.open(ptxName);
+  fstr << ptx;
+  fstr.close();
 
   Constant* pcs = ConstantDataArray::getString(C, ptx);
   
