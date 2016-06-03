@@ -442,8 +442,6 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
                            "run",
                            &ptxModule);
 
-  //func->dump();
-
   auto aitr = func->arg_begin();
 
   parallelForParamMap_.clear();
@@ -639,7 +637,7 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
   }
 
   //llvm::errs() << "---------------- kernel func\n";
-  func->dump();
+  //func->dump();
 
   // =========================== REDUCE FUNCTION
   if(reduceVar){
@@ -1936,7 +1934,12 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
 
     ft = llvm::FunctionType::get(rt, reduceParams, false);
 
-    reductStruct = llvm::StructType::create(params);
+    if(params.empty()){
+      reductStruct = nullptr;
+    }
+    else{
+      reductStruct = llvm::StructType::create(params);
+    }
   }
   else{
     params.push_back(Int32Ty);
@@ -1952,8 +1955,6 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
                            llvm::Function::ExternalLinkage,
                            "run",
                            &ptxModule);
-
-  //func->dump();
 
   BasicBlock* entry = createBasicBlock("entry", func);
 
@@ -1974,8 +1975,14 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
     ++aitr;
     aitr->setName("args");
     
-    Value* args = 
-      B.CreateBitCast(aitr, llvm::PointerType::get(reductStruct, 0));
+    Value* args;
+
+    if(reductStruct){
+      args = B.CreateBitCast(aitr, llvm::PointerType::get(reductStruct, 0));
+    }
+    else{
+      args = nullptr;
+    }
 
     size_t field = 0;
 
@@ -2141,7 +2148,7 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
   }
 
   //llvm::errs() << "---------------- kernel func\n";
-  //func->dump();
+  func->dump();
 
   //reduceFunc->dump();
 

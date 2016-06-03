@@ -1041,6 +1041,18 @@ namespace{
 
 } // namespace
 
+namespace ideas{
+
+  void reduce(CUdeviceptr ptr,
+              size_t size,
+              size_t scalarBytes,
+              bool isFloat,
+              bool isSigned,
+              bool isSum,
+              void* resultPtr);
+
+} // namespace ideas
+
 extern "C"{
 
   void* __ideas_create_synch(uint32_t count){

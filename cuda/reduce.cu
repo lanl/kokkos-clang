@@ -11,7 +11,7 @@
 
 //#include "cuda.h"
 
-#include "mcub/cub/device/device_reduce.cuh"
+#include "mcub/device/device_reduce.cuh"
 
 #define check(err) if(err != CUDA_SUCCESS){ \
       const char* s; \
@@ -38,7 +38,10 @@ namespace{
 
       d_out = (T*)out;
 
-      DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_in, d_out, size);
+      void* bodyFunc = NULL;
+      void* args = NULL;
+
+      DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_in, d_out, size, bodyFunc, args);
       
       err = cuMemAlloc(&temp, sizeof(T) * temp_storage_bytes);
       check(err);
@@ -48,8 +51,11 @@ namespace{
     }
 
     void run(CUdeviceptr ptr, size_t size){
+      void* bodyFunc = NULL;
+      void* args = NULL;
+
       d_in = (T*)ptr;
-      DeviceReduce::Sum(d_temp, temp_storage_bytes, d_in, d_out, size);
+      DeviceReduce::Sum(d_temp, temp_storage_bytes, d_in, d_out, size, bodyFunc, args);
     }
 
     void copyOut(void* resultPtr){
@@ -83,13 +89,7 @@ namespace{
 
   template<class T>
   void product_(CUdeviceptr ptr, size_t size, void* resultPtr){
-    /*
-    thrust::device_ptr<T> begin((T*)ptr);
-    thrust::device_ptr<T> end((T*)ptr + size);
-
-    T result = thrust::reduce(begin, end, T(1), thrust::multiplies<T>());
-    memcpy(resultPtr, &result, sizeof(T));
-    */
+    assert(false && "unimplemented");
   }
 
 } // namespace
