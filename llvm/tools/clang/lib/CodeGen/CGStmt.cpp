@@ -1965,13 +1965,15 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
 
   B.SetInsertPoint(entry);
 
-  Value* reducePtr2;
+  Value* reduceResultPtr;
 
   parallelForParamMap_.clear();
 
   if(reduceVar){
     auto aitr = func->arg_begin();
     aitr->setName("index");
+    Value* index = aitr;
+
     ++aitr;
     aitr->setName("args");
     
@@ -2007,13 +2009,7 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
       parallelForParamMap_[vd] = capturePtr;
     }
     
-    llvm::Type* pt = ConvertType(reduceVar->getType());
     llvm::Type* t = ConvertType(reduceVar->getType().getNonReferenceType());
-
-    reducePtr2 = B.CreateAlloca(pt);
-    Value* ptr5 = B.CreateAlloca(t);
-    B.CreateStore(ptr5, ideasAddr(reducePtr2));
-    Value* indexPtr = B.CreateAlloca(Int32Ty);
 
     Value* initVal;
     
@@ -2040,10 +2036,16 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
       }
     }
 
-    Value* reducePtr = B.CreateLoad(ideasAddr(reducePtr2));
-    B.CreateStore(initVal, ideasAddr(reducePtr));
-    setAddrOfLocalVar(reduceVar, ideasAddr(reducePtr2));
+    Value* ptr = B.CreateAlloca(t, 0, "reduce.result.ptr");
+    B.CreateStore(initVal, ideasAddr(ptr));
 
+    llvm::Type* pt = ConvertType(reduceVar->getType());
+    reduceResultPtr = B.CreateAlloca(pt, 0, "reduce.result.ptr.ptr");
+    B.CreateStore(ptr, ideasAddr(reduceResultPtr));
+    setAddrOfLocalVar(reduceVar, ideasAddr(reduceResultPtr));
+    
+    Value* indexPtr = B.CreateAlloca(Int32Ty, 0, "index.ptr");
+    B.CreateStore(index, ideasAddr(indexPtr));
     setAddrOfLocalVar(indexVar, ideasAddr(indexPtr));  
   }
   else{
@@ -2139,7 +2141,7 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
   EmitStmt(body);
 
   if(reduceVar){
-    Value* retPtr = B.CreateLoad(ideasAddr(reducePtr2));
+    Value* retPtr = B.CreateLoad(ideasAddr(reduceResultPtr));
     Value* ret = B.CreateLoad(ideasAddr(retPtr));
     B.CreateRet(ret);
   }
