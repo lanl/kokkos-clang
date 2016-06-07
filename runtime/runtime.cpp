@@ -35,7 +35,6 @@ __PRETTY_FUNCTION__ << ": " << (X) << std::endl
 
 namespace ideas{
   
-  /*  
   extern void reduce(size_t kernel,
               CUdeviceptr ptr,
               size_t size,
@@ -45,7 +44,6 @@ namespace ideas{
               bool isSum,
               void* args,
               void* resultPtr);
-  */
 
 } // namespace ideas
 
@@ -936,7 +934,7 @@ namespace{
       Kernel* kernel = itr->second;
 
       if(reducePtr){
-        //kernel->reduce(n, reducePtr);
+        //kernel->runReduce(n, reducePtr);
         kernel->run(n, nullptr);
       }
       else{
