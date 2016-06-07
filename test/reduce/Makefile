@@ -20,7 +20,7 @@ include $(KOKKOS_PATH)/Makefile.kokkos
 build: $(EXE)
 
 $(EXE): $(OBJ) $(KOKKOS_LINK_DEPENDS) test-cuda.o
-	$(LINK) $(KOKKOS_LDFLAGS) $(LINKFLAGS) $(EXTRA_PATH) $(OBJ) $(KOKKOS_LIBS) $(LIB) -o $(EXE)
+	$(LINK) $(KOKKOS_LDFLAGS) $(LINKFLAGS) $(EXTRA_PATH) $(OBJ) $(KOKKOS_LIBS) $(LIB) test-cuda.o -o $(EXE)
 
 clean: kokkos-clean 
 	rm -f *.o *.cuda *.host
@@ -31,4 +31,4 @@ clean: kokkos-clean
 	$(CXX) $(KOKKOS_CPPFLAGS) $(KOKKOS_CXXFLAGS) $(CXXFLAGS) $(EXTRA_INC) -c $<
 
 test-cuda.o: test.ptx
-	nvcc -dc test.ptx -o test-cuda.o
+	nvcc -arch sm_35 -dc test.ptx -o test-cuda.o

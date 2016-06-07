@@ -1931,8 +1931,9 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
     TypeVec reduceParams;
     reduceParams.push_back(Int32Ty);
     reduceParams.push_back(VoidPtrTy);
+    reduceParams.push_back(VoidPtrTy);
 
-    ft = llvm::FunctionType::get(rt, reduceParams, false);
+    ft = llvm::FunctionType::get(VoidTy, reduceParams, false);
 
     if(params.empty()){
       reductStruct = nullptr;
@@ -1965,8 +1966,6 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
 
   B.SetInsertPoint(entry);
 
-  Value* reduceResultPtr;
-
   parallelForParamMap_.clear();
 
   if(reduceVar){
@@ -1977,6 +1976,11 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
     ++aitr;
     aitr->setName("args");
     
+    ++aitr;
+    aitr->setName("value");
+
+    Value* reduceResultVoidPtr = aitr;
+
     Value* args;
 
     if(reductStruct){
@@ -2036,13 +2040,14 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
       }
     }
 
-    Value* ptr = B.CreateAlloca(t, 0, "reduce.result.ptr");
-    B.CreateStore(initVal, ideasAddr(ptr));
-
     llvm::Type* pt = ConvertType(reduceVar->getType());
-    reduceResultPtr = B.CreateAlloca(pt, 0, "reduce.result.ptr.ptr");
-    B.CreateStore(ptr, ideasAddr(reduceResultPtr));
-    setAddrOfLocalVar(reduceVar, ideasAddr(reduceResultPtr));
+
+    Value* reduceResultPtr = B.CreateBitCast(reduceResultVoidPtr, pt);
+    B.CreateStore(initVal, ideasAddr(reduceResultPtr));
+
+    Value* reduceResultPtr2 = B.CreateAlloca(pt, 0, "reduce.result.ptr.ptr");
+    B.CreateStore(reduceResultPtr, ideasAddr(reduceResultPtr2));
+    setAddrOfLocalVar(reduceVar, ideasAddr(reduceResultPtr2));
     
     Value* indexPtr = B.CreateAlloca(Int32Ty, 0, "index.ptr");
     B.CreateStore(index, ideasAddr(indexPtr));
@@ -2140,14 +2145,7 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
 
   EmitStmt(body);
 
-  if(reduceVar){
-    Value* retPtr = B.CreateLoad(ideasAddr(reduceResultPtr));
-    Value* ret = B.CreateLoad(ideasAddr(retPtr));
-    B.CreateRet(ret);
-  }
-  else{
-    B.CreateRetVoid();
-  }
+  B.CreateRetVoid();
 
   //llvm::errs() << "---------------- kernel func\n";
   func->dump();
@@ -2169,7 +2167,13 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
   av.push_back(ValueAsMetadata::get(func));    
 
   av.push_back(MDString::get(ptxModule.getContext(), "kernel"));
-  av.push_back(ValueAsMetadata::get(llvm::ConstantInt::get(KR.Int32Ty, 1)));
+
+  if(reduceVar){
+    av.push_back(ValueAsMetadata::get(llvm::ConstantInt::get(KR.Int32Ty, 0)));
+  }
+  else{
+    av.push_back(ValueAsMetadata::get(llvm::ConstantInt::get(KR.Int32Ty, 1)));
+  }
 
   annotations->addOperand(MDNode::get(ptxModule.getContext(), av));
 

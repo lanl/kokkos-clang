@@ -76,7 +76,7 @@ __global__ void DeviceReduceKernel(
     GridEvenShare<OffsetT>  even_share,                 ///< [in] Even-share descriptor for mapping an equal number of tiles onto each thread block
     GridQueue<OffsetT>      queue,                      ///< [in] Drain queue descriptor for dynamically mapping tile data onto thread blocks
     ReductionOpT            reduction_op,
-    void*                   bodyFunc,
+    void(*bodyFunc)(int, void*, void*),
     //typename std::iterator_traits<InputIteratorT>::value_type(*fp)(int, void*),
     void* args)               ///< [in] Binary reduction functor
 {
@@ -127,7 +127,7 @@ __global__ void DeviceReduceSingleTileKernel(
     OffsetT                 num_items,                  ///< [in] Total number of input data items
     ReductionOpT            reduction_op,               ///< [in] Binary reduction functor
     T                       init,
-    void*                   bodyFunc,
+    void(*bodyFunc)(int, void*, void*),
     void*                   args)                       ///< [in] The initial value of the reduction
 {
     // Thread block type for reducing input tiles
@@ -478,7 +478,7 @@ struct DispatchReduce :
     CUB_RUNTIME_FUNCTION __forceinline__
     cudaError_t InvokeSingleTile(
         SingleTileKernelT       single_tile_kernel,
-        void*                   bodyFunc,
+        void(*bodyFunc)(int, void*, void*),
         void*                   args
         )     ///< [in] Kernel function pointer to parameterization of cub::DeviceReduceSingleTileKernel
     {
@@ -545,7 +545,7 @@ struct DispatchReduce :
         ReduceKernelT               reduce_kernel,          ///< [in] Kernel function pointer to parameterization of cub::DeviceReduceKernel
         SingleTileKernelT           single_tile_kernel,     ///< [in] Kernel function pointer to parameterization of cub::DeviceReduceSingleTileKernel
         FillAndResetDrainKernelT    prepare_drain_kernel,
-        void*                       bodyFunc,
+        void(*bodyFunc)(int, void*, void*),
         void*                       args)   ///< [in] Kernel function pointer to parameterization of cub::FillAndResetDrainKernel
     {
 #ifndef CUB_RUNTIME_ENABLED
@@ -693,7 +693,7 @@ struct DispatchReduce :
     /// Invocation
     template <typename ActivePolicyT>
     CUB_RUNTIME_FUNCTION __forceinline__
-    cudaError_t Invoke(void* bodyFunc, void* args)
+    cudaError_t Invoke(void(*bodyFunc)(int, void*, void*), void* args)
     {
         typedef typename ActivePolicyT::SingleTilePolicy    SingleTilePolicyT;
         typedef typename DispatchReduce::MaxPolicy          MaxPolicyT;
@@ -739,7 +739,7 @@ struct DispatchReduce :
         T               init,                               ///< [in] The initial value of the reduction
         cudaStream_t    stream,                             ///< [in] <b>[optional]</b> CUDA stream to launch kernels within.  Default is stream<sub>0</sub>.
         bool            debug_synchronous,
-        void*           bodyFunc,
+        void(*bodyFunc)(int, void*, void*),
         void*           args)                  ///< [in] <b>[optional]</b> Whether or not to synchronize the stream after every kernel launch to check for errors.  Also causes launch configurations to be printed to the console.  Default is \p false.
     {
         typedef typename DispatchReduce::MaxPolicy MaxPolicyT;

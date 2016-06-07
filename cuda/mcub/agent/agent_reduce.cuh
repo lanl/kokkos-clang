@@ -217,7 +217,7 @@ struct AgentReduce
         int                     valid_items,        ///< The number of valid items in the tile
         Int2Type<true>          is_full_tile,       ///< Whether or not this is a full tile
         Int2Type<false>         can_vectorize,
-        void* fp,
+        void(*bodyFunc)(int, void*, void*),
         void* args)      ///< Whether or not we can vectorize loads
     {
         T items[ITEMS_PER_THREAD];
@@ -227,8 +227,8 @@ struct AgentReduce
 
         // Reduce items within each thread stripe
         thread_aggregate = (IS_FIRST_TILE) ?
-            ThreadReduce(items, reduction_op, fp, args) :
-            ThreadReduce(items, reduction_op, thread_aggregate, fp, args);
+            ThreadReduce(items, reduction_op, bodyFunc, args) :
+            ThreadReduce(items, reduction_op, thread_aggregate, bodyFunc, args);
     }
 
 
@@ -243,7 +243,7 @@ struct AgentReduce
         int                     valid_items,        ///< The number of valid items in the tile
         Int2Type<true>          is_full_tile,       ///< Whether or not this is a full tile
         Int2Type<true>          can_vectorize,
-        void* fp,
+        void(*bodyFunc)(int, void*, void*),
         void* args)      ///< Whether or not we can vectorize loads
     {
         // Alias items as an array of VectorT and load it in striped fashion
@@ -264,8 +264,8 @@ struct AgentReduce
 
         // Reduce items within each thread stripe
         thread_aggregate = (IS_FIRST_TILE) ?
-            ThreadReduce(items, reduction_op, fp, args) :
-            ThreadReduce(items, reduction_op, thread_aggregate, fp, args);
+            ThreadReduce(items, reduction_op, bodyFunc, args) :
+            ThreadReduce(items, reduction_op, thread_aggregate, bodyFunc, args);
     }
 
     // ndm
@@ -280,7 +280,7 @@ struct AgentReduce
         int                     valid_items,        ///< The number of valid items in the tile
         Int2Type<false>         is_full_tile,       ///< Whether or not this is a full tile
         Int2Type<CAN_VECTORIZE> can_vectorize,
-        void* fp,
+        void(*bodyFunc)(int, void*, void*),
         void* args)      ///< Whether or not we can vectorize loads
     {
         // Partial tile
@@ -319,7 +319,7 @@ struct AgentReduce
         OffsetT block_offset,                       ///< [in] Threadblock begin offset (inclusive)
         OffsetT block_end,                          ///< [in] Threadblock end offset (exclusive)
         Int2Type<CAN_VECTORIZE> can_vectorize,
-        void* fp,
+        void(*bodyFunc)(int, void*, void*),
         void* args)      ///< Whether or not we can vectorize loads
     {
         T thread_aggregate;
@@ -328,18 +328,18 @@ struct AgentReduce
         {
             // First tile isn't full (not all threads have valid items)
             int valid_items = block_end - block_offset;
-            ConsumeTile<true>(thread_aggregate, block_offset, valid_items, Int2Type<false>(), can_vectorize, fp, args);
+            ConsumeTile<true>(thread_aggregate, block_offset, valid_items, Int2Type<false>(), can_vectorize, bodyFunc, args);
             return BlockReduceT(temp_storage.reduce).Reduce(thread_aggregate, reduction_op, valid_items);
         }
 
         // At least one full block
-        ConsumeTile<true>(thread_aggregate, block_offset, TILE_ITEMS, Int2Type<true>(), can_vectorize, fp, args);
+        ConsumeTile<true>(thread_aggregate, block_offset, TILE_ITEMS, Int2Type<true>(), can_vectorize, bodyFunc, args);
         block_offset += TILE_ITEMS;
 
         // Consume subsequent full tiles of input
         while (block_offset + TILE_ITEMS <= block_end)
         {
-            ConsumeTile<false>(thread_aggregate, block_offset, TILE_ITEMS, Int2Type<true>(), can_vectorize, fp, args);
+            ConsumeTile<false>(thread_aggregate, block_offset, TILE_ITEMS, Int2Type<true>(), can_vectorize, bodyFunc, args);
             block_offset += TILE_ITEMS;
         }
 
@@ -347,7 +347,7 @@ struct AgentReduce
         if (block_offset < block_end)
         {
             int valid_items = block_end - block_offset;
-            ConsumeTile<false>(thread_aggregate, block_offset, valid_items, Int2Type<false>(), can_vectorize, fp, args);
+            ConsumeTile<false>(thread_aggregate, block_offset, valid_items, Int2Type<false>(), can_vectorize, bodyFunc, args);
         }
 
         // Compute block-wide reduction (all threads have valid items)
@@ -362,12 +362,12 @@ struct AgentReduce
     __device__ __forceinline__ T ConsumeRange(
         OffsetT block_offset,                       ///< [in] Threadblock begin offset (inclusive)
         OffsetT block_end,
-        void* fp,
+        void(*bodyFunc)(int, void*, void*),
         void* args)                          ///< [in] Threadblock end offset (exclusive)
     {
         return (IsAligned(d_in + block_offset, Int2Type<ATTEMPT_VECTORIZATION>())) ?
-            ConsumeRange(block_offset, block_end, Int2Type<true && ATTEMPT_VECTORIZATION>(), fp, args) :
-            ConsumeRange(block_offset, block_end, Int2Type<false && ATTEMPT_VECTORIZATION>(), fp, args);
+            ConsumeRange(block_offset, block_end, Int2Type<true && ATTEMPT_VECTORIZATION>(), bodyFunc, args) :
+            ConsumeRange(block_offset, block_end, Int2Type<false && ATTEMPT_VECTORIZATION>(), bodyFunc, args);
     }
 
 
@@ -404,7 +404,7 @@ struct AgentReduce
         int                     num_items,          ///< Total number of input items
         GridQueue<OffsetT>      queue,              ///< Queue descriptor for assigning tiles of work to thread blocks
         Int2Type<CAN_VECTORIZE> can_vectorize,
-        void* fp,
+        void(*bodyFunc)(int, void*, void*),
         void* args)      ///< Whether or not we can vectorize loads
     {
         // We give each thread block at least one tile of input.
@@ -416,12 +416,12 @@ struct AgentReduce
         {
             // First tile isn't full (not all threads have valid items)
             int valid_items = num_items - block_offset;
-            ConsumeTile<true>(thread_aggregate, block_offset, valid_items, Int2Type<false>(), can_vectorize, fp, args);
+            ConsumeTile<true>(thread_aggregate, block_offset, valid_items, Int2Type<false>(), can_vectorize, bodyFunc, args);
             return BlockReduceT(temp_storage.reduce).Reduce(thread_aggregate, reduction_op, valid_items);
         }
 
         // Consume first full tile of input
-        ConsumeTile<true>(thread_aggregate, block_offset, TILE_ITEMS, Int2Type<true>(), can_vectorize, fp, args);
+        ConsumeTile<true>(thread_aggregate, block_offset, TILE_ITEMS, Int2Type<true>(), can_vectorize, bodyFunc, args);
 
         if (num_items > even_share_base)
         {
@@ -437,7 +437,7 @@ struct AgentReduce
             // Consume more full tiles
             while (block_offset + TILE_ITEMS <= num_items)
             {
-                ConsumeTile<false>(thread_aggregate, block_offset, TILE_ITEMS, Int2Type<true>(), can_vectorize, fp, args);
+                ConsumeTile<false>(thread_aggregate, block_offset, TILE_ITEMS, Int2Type<true>(), can_vectorize, bodyFunc, args);
 
                 __syncthreads();
 
@@ -455,7 +455,7 @@ struct AgentReduce
             if (block_offset < num_items)
             {
                 int valid_items = num_items - block_offset;
-                ConsumeTile<false>(thread_aggregate, block_offset, valid_items, Int2Type<false>(), can_vectorize, fp, args);
+                ConsumeTile<false>(thread_aggregate, block_offset, valid_items, Int2Type<false>(), can_vectorize, bodyFunc, args);
             }
         }
 
@@ -475,12 +475,12 @@ struct AgentReduce
         GridEvenShare<OffsetT>          &even_share,        ///< [in] GridEvenShare descriptor
         GridQueue<OffsetT>              &queue,             ///< [in,out] GridQueue descriptor
         Int2Type<GRID_MAPPING_DYNAMIC>  is_dynamic,
-        void* fp,
+        void(*bodyFunc)(int, void*, void*),
         void* args)         ///< [in] Marker type indicating this is a dynamic mapping
     {
         return (IsAligned(d_in, Int2Type<ATTEMPT_VECTORIZATION>())) ?
-            ConsumeTiles(num_items, queue, Int2Type<true && ATTEMPT_VECTORIZATION>(), fp, args) :
-            ConsumeTiles(num_items, queue, Int2Type<false && ATTEMPT_VECTORIZATION>(), fp, args);
+            ConsumeTiles(num_items, queue, Int2Type<true && ATTEMPT_VECTORIZATION>(), bodyFunc, args) :
+            ConsumeTiles(num_items, queue, Int2Type<false && ATTEMPT_VECTORIZATION>(), bodyFunc, args);
     }
 
 };

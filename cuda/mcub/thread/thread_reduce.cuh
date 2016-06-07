@@ -64,13 +64,14 @@ __device__ __forceinline__ T ThreadReduce(
     T                   prefix,                 ///< [in] Prefix to seed reduction with
     Int2Type<LENGTH>    length,
     int                 index,
-    void*               bodyFunc,
+    void(*bodyFunc)(int, void*, void*),
     void*               args)
 {
     // ndm
     // T addend = *input;
 
-    T addend = ((T(*)(int, void*))bodyFunc)(index, args);
+    T addend;
+    bodyFunc(index, args, &addend);
 
     prefix = reduction_op(prefix, addend);
 
@@ -86,7 +87,7 @@ __device__ __forceinline__ T ThreadReduce(
     T                   prefix,                 ///< [in] Prefix to seed reduction with
     Int2Type<0>         length,
     int                 index,
-    void* fp,
+    void(*bodyFunc)(int, void*, void*),
     void*               args)
 {
     return prefix;
@@ -108,10 +109,10 @@ __device__ __forceinline__ T ThreadReduce(
     T*          input,                  ///< [in] Input array
     ReductionOp reduction_op,           ///< [in] Binary reduction operator
     T           prefix,
-    void* fp,
+    void(*bodyFunc)(int, void*, void*),
     void* args)                 ///< [in] Prefix to seed reduction with
 {
-    return ThreadReduce(input, reduction_op, prefix, Int2Type<LENGTH>(), 0, fp, args);
+    return ThreadReduce(input, reduction_op, prefix, Int2Type<LENGTH>(), 0, bodyFunc, args);
 }
 
 
@@ -131,13 +132,14 @@ template <
 __device__ __forceinline__ T ThreadReduce(
     T*          input,                  ///< [in] Input array
     ReductionOp reduction_op,
-    void* bodyFunc,
+    void(*bodyFunc)(int, void*, void*),
     void* args)
                ///< [in] Binary reduction operator
 {
     // ndm
 
-    T prefix = ((T(*)(int, void*))bodyFunc)(0, args);
+    T prefix;
+    bodyFunc(0, args, &prefix);
 
     return ThreadReduce<LENGTH - 1>(input + 1, reduction_op, prefix, bodyFunc, args);
 }
@@ -159,11 +161,11 @@ __device__ __forceinline__ T ThreadReduce(
     T           (&input)[LENGTH],       ///< [in] Input array
     ReductionOp reduction_op,           ///< [in] Binary reduction operator
     T           prefix,
-    void* fp,
+    void(*bodyFunc)(int, void*, void*),
     void*               args)                 ///< [in] Prefix to seed reduction with
 {
     // ndm - pass 0 for index?
-    return ThreadReduce(input, reduction_op, prefix, Int2Type<LENGTH>(), 0, fp, args);
+    return ThreadReduce(input, reduction_op, prefix, Int2Type<LENGTH>(), 0, bodyFunc, args);
 }
 
 // ndm
@@ -182,10 +184,10 @@ template <
 __device__ __forceinline__ T ThreadReduce(
     T           (&input)[LENGTH],       ///< [in] Input array
     ReductionOp reduction_op,
-    void* fp,
+    void(*bodyFunc)(int, void*, void*),
     void* args)           ///< [in] Binary reduction operator
 {
-    return ThreadReduce<LENGTH>((T*) input, reduction_op, fp, args);
+    return ThreadReduce<LENGTH>((T*) input, reduction_op, bodyFunc, args);
 }
 
 

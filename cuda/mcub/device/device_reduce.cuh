@@ -223,7 +223,7 @@ struct DeviceReduce
         InputIteratorT              d_in,                               ///< [in] Pointer to the input sequence of data items
         OutputIteratorT             d_out,                              ///< [out] Pointer to the output aggregate
         int                         num_items,
-        void*                       bodyFunc,
+        void(*bodyFunc)(int, void*, void*),
         void*                       args,                               ///< [in] Total number of input items (i.e., length of \p d_in)
         cudaStream_t                stream              = 0,            ///< [in] <b>[optional]</b> CUDA stream to launch kernels within.  Default is stream<sub>0</sub>.
         bool                        debug_synchronous   = false)        ///< [in] <b>[optional]</b> Whether or not to synchronize the stream after every kernel launch to check for errors.  Also causes launch configurations to be printed to the console.  Default is \p false.

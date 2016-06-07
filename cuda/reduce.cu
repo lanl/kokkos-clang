@@ -23,111 +23,127 @@
 using namespace std;
 using namespace cub;
 
+extern "C" __device__ void run(int index, void* args, void* result);
+
+typedef void(*KernelFunc)(int, void*, void*);
+
 namespace{
 
   template<class T>
-  class Data{
+  class Reduce{
   public:
-    Data(size_t size)
-    : size(size){
-      d_temp_storage = NULL;
-      temp_storage_bytes = 0;
+    Reduce(size_t kernel, size_t size, void* args)
+    : size_(size),
+    tempStorage_(NULL),
+    tempStorageBytes_(0),
+    args_(args){
 
-      CUresult err = cuMemAlloc(&out, sizeof(T));
+      kernelFunc_ = getKernel(kernel);
+
+      CUresult err = cuMemAlloc(&result_, sizeof(T));
       check(err);
 
-      d_out = (T*)out;
+      T* in = NULL;
+      T* temp = NULL;
+      T* result = NULL;
 
-      void* bodyFunc = NULL;
-      void* args = NULL;
-
-      DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_in, d_out, size, bodyFunc, args);
+      DeviceReduce::Sum(temp, tempStorageBytes_,
+                        in, result, size_, kernelFunc_, args_);
       
-      err = cuMemAlloc(&temp, sizeof(T) * temp_storage_bytes);
-      check(err);
-
-      d_temp = (T*)temp;
-
-    }
-
-    void run(CUdeviceptr ptr, size_t size){
-      void* bodyFunc = NULL;
-      void* args = NULL;
-
-      d_in = (T*)ptr;
-      DeviceReduce::Sum(d_temp, temp_storage_bytes, d_in, d_out, size, bodyFunc, args);
-    }
-
-    void copyOut(void* resultPtr){
-      CUresult err = cuMemcpyDtoH(resultPtr, (CUdeviceptr)d_out, sizeof(T));
+      err = cuMemAlloc(&temp_, sizeof(T) * tempStorageBytes_);
       check(err);
     }
 
-    T* d_in;
-    T* d_out;
-    T* d_temp;
+    void run(CUdeviceptr ptr, void* resultPtr){
+      T* in = (T*)ptr;
+      T* temp = (T*)temp_;
+      T* result = (T*)result_;
+
+      DeviceReduce::Sum(temp, tempStorageBytes_,
+                        in, result, size_, kernelFunc_, args_);
+
+      CUresult err = cuMemcpyDtoH(resultPtr, result_, sizeof(T));
+      check(err);
+    }
+
+    KernelFunc getKernel(size_t kernel){
+      switch(kernel){
+        case 0:
+          return &::run;
+        default:
+          assert(false);
+      }
+
+      return NULL;
+    }
     
-    CUdeviceptr out;
-    CUdeviceptr temp;
+    CUdeviceptr result_;
+    CUdeviceptr temp_;
 
-    void            *d_temp_storage;
-    size_t          temp_storage_bytes;
-    size_t          size;
-
+    void* tempStorage_;
+    size_t tempStorageBytes_;
+    size_t size_;
+    KernelFunc kernelFunc_;
+    void* args_;
   };
 
-  Data<double>* _data = NULL;
-
   template<class T>
-  void sum_(CUdeviceptr ptr, size_t size, void* resultPtr){
-    if(!_data){
-      _data = new Data<double>(size);
-    }
-    _data->run(ptr, size);
-    _data->copyOut(resultPtr);
+  void sum_(size_t kernel,
+            CUdeviceptr ptr,
+            size_t size,
+            void* args,
+            void* resultPtr){
+    Reduce<T>* r = new Reduce<T>(kernel, size, args);
+    r->run(ptr, resultPtr);
   }
 
   template<class T>
-  void product_(CUdeviceptr ptr, size_t size, void* resultPtr){
-    assert(false && "unimplemented");
+  void product_(size_t kernel,
+                CUdeviceptr ptr,
+                size_t size,
+                void* args,
+                void* resultPtr){
+    assert(false);
   }
 
 } // namespace
 
 namespace ideas{
 
-void reduce(CUdeviceptr ptr,
+void reduce(size_t kernel,
+            CUdeviceptr ptr,
             size_t size,
             size_t scalarBytes,
             bool isFloat,
             bool isSigned,
             bool isSum,
+            void* args,
             void* resultPtr){
   switch(scalarBytes){
     case 8:
       if(isFloat){
         if(isSum){
-          sum_<double>(ptr, size, resultPtr);
+          sum_<double>(kernel, ptr, size, args, resultPtr);
         }
         else{
-          product_<double>(ptr, size, resultPtr);
+          product_<double>(kernel, ptr, size, args, resultPtr);
         }
       }
       else{
         if(isSigned){
           if(isSum){
-            sum_<int64_t>(ptr, size, resultPtr);
+            sum_<int64_t>(kernel, ptr, size, args, resultPtr);
           }
           else{
-            product_<int64_t>(ptr, size, resultPtr);
+            product_<int64_t>(kernel, ptr, size, args, resultPtr);
           }
         }
         else{
           if(isSum){
-            sum_<uint64_t>(ptr, size, resultPtr);
+            sum_<uint64_t>(kernel, ptr, size, args, resultPtr);
           }
           else{
-            product_<uint64_t>(ptr, size, resultPtr);
+            product_<uint64_t>(kernel, ptr, size, args, resultPtr);
           }
         }
       }
@@ -135,27 +151,27 @@ void reduce(CUdeviceptr ptr,
     case 4:
       if(isFloat){
         if(isSum){
-          sum_<float>(ptr, size, resultPtr);
+          sum_<float>(kernel, ptr, size, args, resultPtr);
         }
         else{
-          product_<float>(ptr, size, resultPtr);
+          product_<float>(kernel, ptr, size, args, resultPtr);
         }
       }
       else{
         if(isSigned){
           if(isSum){
-            sum_<int32_t>(ptr, size, resultPtr);
+            sum_<int32_t>(kernel, ptr, size, args, resultPtr);
           }
           else{
-            product_<int32_t>(ptr, size, resultPtr);
+            product_<int32_t>(kernel, ptr, size, args, resultPtr);
           }
         }
         else{
           if(isSum){
-            sum_<uint32_t>(ptr, size, resultPtr);
+            sum_<uint32_t>(kernel, ptr, size, args, resultPtr);
           }
           else{
-            product_<uint32_t>(ptr, size, resultPtr);
+            product_<uint32_t>(kernel, ptr, size, args, resultPtr);
           }
         }
       }
@@ -167,41 +183,18 @@ void reduce(CUdeviceptr ptr,
       else{
         if(isSigned){
           if(isSum){
-            sum_<int16_t>(ptr, size, resultPtr);
+            sum_<int16_t>(kernel, ptr, size, args, resultPtr);
           }
           else{
-            product_<int16_t>(ptr, size, resultPtr);
+            product_<int16_t>(kernel, ptr, size, args, resultPtr);
           }
         }
         else{
           if(isSum){
-            sum_<uint16_t>(ptr, size, resultPtr);
+            sum_<uint16_t>(kernel, ptr, size, args, resultPtr);
           }
           else{
-            product_<uint16_t>(ptr, size, resultPtr);
-          }
-        }
-      }
-      break;
-    case 1:
-      if(isFloat){
-        assert(false);
-      }
-      else{
-        if(isSigned){
-          if(isSum){
-            sum_<int8_t>(ptr, size, resultPtr);
-          }
-          else{
-            product_<int8_t>(ptr, size, resultPtr);
-          }
-        }
-        else{
-          if(isSum){
-            sum_<uint8_t>(ptr, size, resultPtr);
-          }
-          else{
-            product_<uint8_t>(ptr, size, resultPtr);
+            product_<uint16_t>(kernel, ptr, size, args, resultPtr);
           }
         }
       }
