@@ -29,6 +29,17 @@ typedef void(*KernelFunc)(int, void*, void*);
 
 namespace{
 
+  KernelFunc getKernel(size_t kernel){
+    switch(kernel){
+      case 0:
+        return run;
+      default:
+        assert(false);
+    }
+
+    return NULL;
+  }
+
   template<class T>
   class Reduce{
   public:
@@ -64,17 +75,6 @@ namespace{
 
       CUresult err = cuMemcpyDtoH(resultPtr, result_, sizeof(T));
       check(err);
-    }
-
-    KernelFunc getKernel(size_t kernel){
-      switch(kernel){
-        case 0:
-          return &::run;
-        default:
-          assert(false);
-      }
-
-      return NULL;
     }
     
     CUdeviceptr result_;

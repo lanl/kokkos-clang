@@ -33,6 +33,22 @@ __PRETTY_FUNCTION__ << ": " << (X) << std::endl
       assert(false); \
     }
 
+namespace ideas{
+  
+  /*  
+  extern void reduce(size_t kernel,
+              CUdeviceptr ptr,
+              size_t size,
+              size_t scalarBytes,
+              bool isFloat,
+              bool isSigned,
+              bool isSum,
+              void* args,
+              void* resultPtr);
+  */
+
+} // namespace ideas
+
 namespace{
 
   const size_t NUM_THREADS = 16;
@@ -689,62 +705,17 @@ namespace{
         cuStreamSynchronize(stream_);
 
         if(reduceRetPtr_){
-          reduce(hostPtr_, reducePtr_, gridDimX_, reduceSize_, reduceFloat_,
-                 reduceSigned_, reduceSum_, reduceRetPtr_);
+          reduce(hostPtr_, reducePtr_, gridDimX_, reduceSize_,
+                 reduceFloat_, reduceSigned_, reduceSum_, reduceRetPtr_);
         }
       }
 
-      void run2(uint32_t n, void* reduceRetPtr){
-        assert(false);
-#if 0
+      void runReduce(uint32_t n, void* reduceRetPtr){
+        reduceRetPtr_ = reduceRetPtr;
         n_ = n;
-        size_t gridDimX;
-
-        if(!ready_){
-          for(KernelView* kernelView : views_){
-            View* view = kernelView->view();
-
-            kernelParams_.push_back(&view->devPtr());
-            
-            auto& dims = view->dims();
-
-            /*
-            for(auto di : dims){
-              ndump(di);
-            }
-            */
-
-            CUresult err = cuMemAlloc(&view->dimsPtr(), dims.size() * 4);
-            check(err);
-
-            err = cuMemcpyHtoD(view->dimsPtr(), dims.data(),
-                               dims.size() * 4);
-            check(err);
-
-            kernelParams_.push_back(&view->dimsPtr());
-          }
-
-          for(void* varPtr : vars_){
-            kernelParams_.push_back(varPtr);
-          }
-
-          kernelParams_.push_back(&n_);
-
-          if(reduceSize_ > 0){
-            kernelParams_.push_back(&reducePtr_);
-          }
-
-          ready_ = true;
-        }
-
-        CUresult err;
-
-
-        // ndm - call CUB
-
-        check(err);
-#endif
-      }      
+        CUdeviceptr ptr;
+        //ideas::reduce(0, ptr, n_, 8, true, false, true, nullptr, reduceRetPtr_);
+      }    
       
       bool ready(){
         return ready_;
@@ -964,7 +935,13 @@ namespace{
 
       Kernel* kernel = itr->second;
 
-      kernel->run(n, reducePtr);
+      if(reducePtr){
+        //kernel->reduce(n, reducePtr);
+        kernel->run(n, nullptr);
+      }
+      else{
+        kernel->run(n, nullptr);
+      }
     }
 
     void awaitKernel(uint32_t kernelId){ 
@@ -974,15 +951,6 @@ namespace{
       Kernel* kernel = itr->second;
 
       kernel->await();
-    }
-
-    void runKernel2(uint32_t kernelId, uint32_t n, void* reducePtr){ 
-      auto itr = kernelMap_.find(kernelId);
-      assert(itr != kernelMap_.end());
-
-      Kernel* kernel = itr->second;
-
-      kernel->run2(n, reducePtr);
     }
 
     void copyViewToDevice(void** viewPtr){
@@ -1040,18 +1008,6 @@ namespace{
   CUDARuntime _cudaRuntime;
 
 } // namespace
-
-namespace ideas{
-
-  void reduce(CUdeviceptr ptr,
-              size_t size,
-              size_t scalarBytes,
-              bool isFloat,
-              bool isSigned,
-              bool isSum,
-              void* resultPtr);
-
-} // namespace ideas
 
 extern "C"{
 
@@ -1153,10 +1109,6 @@ extern "C"{
 
   void __ideas_cuda_await_kernel(uint32_t kernelId){
     return _cudaRuntime.awaitKernel(kernelId);
-  }
-
-  void __ideas_cuda_run_kernel2(uint32_t kernelId, uint32_t n, void* reducePtr){
-    return _cudaRuntime.runKernel2(kernelId, n, reducePtr);
   }
 
   void __ideas_debug1(void* ptr){
