@@ -68,7 +68,6 @@ __device__ __forceinline__ T ThreadReduce(
     void*               args)
 {
     // ndm
-    // T addend = *input;
 
     T addend;
     bodyFunc(index, args, &addend);
@@ -139,7 +138,7 @@ __device__ __forceinline__ T ThreadReduce(
     // ndm
 
     T prefix;
-    bodyFunc(0, args, &prefix);
+    (*bodyFunc)(0, args, &prefix);
 
     return ThreadReduce<LENGTH - 1>(input + 1, reduction_op, prefix, bodyFunc, args);
 }

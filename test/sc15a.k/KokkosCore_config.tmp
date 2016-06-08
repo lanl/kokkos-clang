@@ -1,6 +1,6 @@
 /* ---------------------------------------------
 Makefile constructed configuration:
-Wed Feb 24 16:43:33 MST 2016
+Wed Jun  8 09:36:37 MDT 2016
 ----------------------------------------------*/
 /* Execution Spaces */
 #define KOKKOS_HAVE_OPENMP 1

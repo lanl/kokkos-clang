@@ -53,6 +53,7 @@ namespace{
     tempStorage_(NULL),
     tempStorageBytes_(0),
     args_(args){
+      kernelNum_ = kernel;
 
       kernelFunc_ = getKernel(kernel);
 
@@ -64,7 +65,7 @@ namespace{
       T* result = NULL;
 
       DeviceReduce::Sum(temp, tempStorageBytes_,
-                        in, result, size_, kernelFunc_, args_);
+                        in, result, size_, kernelNum_, args_);
       
       err = cuMemAlloc(&temp_, sizeof(T) * tempStorageBytes_);
       check(err);
@@ -76,7 +77,7 @@ namespace{
       T* result = (T*)result_;
 
       DeviceReduce::Sum(temp, tempStorageBytes_,
-                        in, result, size_, kernelFunc_, args_);
+                        in, result, size_, kernelNum_, args_);
 
       CUresult err = cuMemcpyDtoH(resultPtr, result_, sizeof(T));
       check(err);
@@ -90,6 +91,7 @@ namespace{
     size_t size_;
     KernelFunc kernelFunc_;
     void* args_;
+    int kernelNum_;
   };
 
   template<class T>

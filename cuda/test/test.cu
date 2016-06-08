@@ -23,7 +23,7 @@ namespace ideas{
               bool isSum,
               void* args,
               void* resultPtr);
-  
+
 } // namespace ideas
 
 int main(int argc, char** argv){  
@@ -43,7 +43,7 @@ int main(int argc, char** argv){
 
   double r = 0;
 
-  ideas::reduce(0, ptr, 1024, 8, true, true, true, NULL, &r);
+  ideas::reduce(0, ptr, 4096, 8, true, true, true, NULL, &r);
 
   cout << "r = " << r << endl;
 
