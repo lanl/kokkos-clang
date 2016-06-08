@@ -1,15 +1,9 @@
 #include <iostream>
 
-#include <thrust/device_ptr.h>
-#include <thrust/device_vector.h>
-#include <thrust/scan.h>
-#include <thrust/fill.h>
-#include <thrust/copy.h>
-#include <thrust/reduce.h>
+#include <cstdint>
+#include <cassert>
 
-//#include <cstdint>
-
-//#include "cuda.h"
+#include <cuda.h>
 
 #include "mcub/device/device_reduce.cuh"
 
@@ -20,10 +14,21 @@
       assert(false); \
     }
 
+#define np(X)                                                           \
+std::cout << __FILE__ << ":" << __LINE__ << ": " << __PRETTY_FUNCTION__ \
+           << ": " << #X << " = " << (X) << std::endl
+
 using namespace std;
 using namespace cub;
 
-extern "C" __device__ void run(int index, void* args, void* result);
+#ifdef IDEAS_TEST
+  extern "C" __device__ void run(int index, void* args, void* result){
+    double* ptr = (double*)result;
+    *ptr = 1.0;
+  }
+#else
+  extern "C" __device__ void run(int index, void* args, void* result);
+#endif
 
 typedef void(*KernelFunc)(int, void*, void*);
 
