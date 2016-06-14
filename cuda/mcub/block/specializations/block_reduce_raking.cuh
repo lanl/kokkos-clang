@@ -133,15 +133,19 @@ struct BlockReduceRaking
         T                           *raking_segment,
         T                           partial,            ///< [in] <b>[<em>lane</em><sub>0</sub> only]</b> Warp-wide aggregate reduction of input items
         int                         num_valid,          ///< [in] Number of valid elements (may be less than BLOCK_THREADS)
-        Int2Type<ITERATION>         iteration)
+        Int2Type<ITERATION>         iteration,
+        void(*bodyFunc)(int, void*, void*),
+        void* args
+        )
     {
         // Update partial if addend is in range
         if ((IS_FULL_TILE && RAKING_UNGUARDED) || ((linear_tid * SEGMENT_LENGTH) + ITERATION < num_valid))
         {
-            T addend = raking_segment[ITERATION];
+            T addend;
+            bodyFunc(((linear_tid * SEGMENT_LENGTH) + ITERATION), args, &addend);
             partial = reduction_op(partial, addend);
         }
-        return RakingReduction<IS_FULL_TILE>(reduction_op, raking_segment, partial, num_valid, Int2Type<ITERATION + 1>());
+        return RakingReduction<IS_FULL_TILE>(reduction_op, raking_segment, partial, num_valid, Int2Type<ITERATION + 1>(), bodyFunc, args);
     }
 
     template <bool IS_FULL_TILE, typename ReductionOp>
@@ -150,7 +154,9 @@ struct BlockReduceRaking
         T                           *raking_segment,
         T                           partial,            ///< [in] <b>[<em>lane</em><sub>0</sub> only]</b> Warp-wide aggregate reduction of input items
         int                         num_valid,          ///< [in] Number of valid elements (may be less than BLOCK_THREADS)
-        Int2Type<SEGMENT_LENGTH>    iteration)
+        Int2Type<SEGMENT_LENGTH>    iteration,
+        void(*bodyFunc)(int, void*, void*),
+        void* args)
     {
         return partial;
     }
@@ -192,7 +198,7 @@ struct BlockReduceRaking
                 T *raking_segment = BlockRakingLayout::RakingPtr(temp_storage.raking_grid, linear_tid);
                 partial = raking_segment[0];
 
-                partial = RakingReduction<IS_FULL_TILE>(reduction_op, raking_segment, partial, num_valid, Int2Type<1>());
+                partial = RakingReduction<IS_FULL_TILE>(reduction_op, raking_segment, partial, num_valid, Int2Type<1>(), bodyFunc, args);
 
                 partial = WarpReduce(temp_storage.warp_storage).template Reduce<IS_FULL_TILE && RAKING_UNGUARDED, SEGMENT_LENGTH>(
                     partial,
