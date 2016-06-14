@@ -164,7 +164,9 @@ struct BlockReduceRaking
     __device__ __forceinline__ T Reduce(
         T                   partial,            ///< [in] Calling thread's input partial reductions
         int                 num_valid,          ///< [in] Number of valid elements (may be less than BLOCK_THREADS)
-        ReductionOp         reduction_op)       ///< [in] Binary reduction operator
+        ReductionOp         reduction_op,
+        void(*bodyFunc)(int, void*, void*),
+        void* args)       ///< [in] Binary reduction operator
     {
         if (WARP_SYNCHRONOUS)
         {
@@ -172,7 +174,9 @@ struct BlockReduceRaking
             partial = WarpReduce(temp_storage.warp_storage).template Reduce<IS_FULL_TILE, SEGMENT_LENGTH>(
                 partial,
                 num_valid,
-                reduction_op);
+                reduction_op,
+                bodyFunc,
+                args);
         }
         else
         {
@@ -193,7 +197,9 @@ struct BlockReduceRaking
                 partial = WarpReduce(temp_storage.warp_storage).template Reduce<IS_FULL_TILE && RAKING_UNGUARDED, SEGMENT_LENGTH>(
                     partial,
                     num_valid,
-                    reduction_op);
+                    reduction_op,
+                    bodyFunc,
+                    args);
 
             }
         }

@@ -249,20 +249,30 @@ struct AgentReduce
         // Alias items as an array of VectorT and load it in striped fashion
         enum { WORDS =  ITEMS_PER_THREAD / VECTOR_LOAD_LENGTH };
 
-        T items[ITEMS_PER_THREAD];
+        // ndm
+        //T items[ITEMS_PER_THREAD];
+        T items[1];
 
-        VectorT *vec_items = reinterpret_cast<VectorT*>(items);
+        //VectorT *vec_items = reinterpret_cast<VectorT*>(items);
 
         // Vector Input iterator wrapper type (for applying cache modifier)
-        T *d_in_unqualified = const_cast<T*>(d_in) + block_offset + (threadIdx.x * VECTOR_LOAD_LENGTH);
-        CacheModifiedInputIterator<AgentReducePolicy::LOAD_MODIFIER, VectorT, OffsetT> d_vec_in(
-            reinterpret_cast<VectorT*>(d_in_unqualified));
+        //T *d_in_unqualified = const_cast<T*>(d_in) + block_offset + (threadIdx.x * VECTOR_LOAD_LENGTH);
+        //CacheModifiedInputIterator<AgentReducePolicy::LOAD_MODIFIER, VectorT, OffsetT> d_vec_in(
+        //    reinterpret_cast<VectorT*>(d_in_unqualified));
 
-        #pragma unroll
-        for (int i = 0; i < WORDS; ++i)
-            vec_items[i] = d_vec_in[BLOCK_THREADS * i];
+        // ndm
+        //#pragma unroll
+        //for (int i = 0; i < WORDS; ++i)
+        //    vec_items[i] = d_vec_in[BLOCK_THREADS * i];
 
         // Reduce items within each thread stripe
+        /*
+        thread_aggregate = (IS_FIRST_TILE) ?
+            ThreadReduce(items, reduction_op, bodyFunc, args) :
+            ThreadReduce(items, reduction_op, thread_aggregate, bodyFunc, args);
+        */
+
+        // ndm
         thread_aggregate = (IS_FIRST_TILE) ?
             ThreadReduce(items, reduction_op, bodyFunc, args) :
             ThreadReduce(items, reduction_op, thread_aggregate, bodyFunc, args);
@@ -283,6 +293,9 @@ struct AgentReduce
         void(*bodyFunc)(int, void*, void*),
         void* args)      ///< Whether or not we can vectorize loads
     {
+        // ndm
+
+        /*
         // Partial tile
         int thread_offset = threadIdx.x;
 
@@ -299,6 +312,25 @@ struct AgentReduce
             thread_aggregate = reduction_op(
                 thread_aggregate,
                 d_wrapped_in[block_offset + thread_offset]);
+            thread_offset += BLOCK_THREADS;
+        }
+        */
+
+        int thread_offset = threadIdx.x;
+
+        // Read first item
+        if (thread_offset < valid_items)
+        {
+            bodyFunc(block_offset + thread_offset, args, &thread_aggregate);
+            thread_offset += BLOCK_THREADS;
+        }
+
+        while (thread_offset < valid_items)
+        {
+            T addend;
+            bodyFunc(block_offset + thread_offset, args, &addend);
+
+            thread_aggregate = reduction_op(thread_aggregate, addend);
             thread_offset += BLOCK_THREADS;
         }
     }
@@ -330,7 +362,7 @@ struct AgentReduce
             // First tile isn't full (not all threads have valid items)
             int valid_items = block_end - block_offset;
             ConsumeTile<true>(thread_aggregate, block_offset, valid_items, Int2Type<false>(), can_vectorize, bodyFunc, args);
-            return BlockReduceT(temp_storage.reduce).Reduce(thread_aggregate, reduction_op, valid_items);
+            return BlockReduceT(temp_storage.reduce).Reduce(thread_aggregate, reduction_op, valid_items, bodyFunc, args);
         }
 
         // At least one full block
@@ -352,7 +384,7 @@ struct AgentReduce
         }
 
         // Compute block-wide reduction (all threads have valid items)
-        return BlockReduceT(temp_storage.reduce).Reduce(thread_aggregate, reduction_op);
+        return BlockReduceT(temp_storage.reduce).Reduce(thread_aggregate, reduction_op, bodyFunc, args);
     }
 
 
@@ -419,7 +451,7 @@ struct AgentReduce
             // First tile isn't full (not all threads have valid items)
             int valid_items = num_items - block_offset;
             ConsumeTile<true>(thread_aggregate, block_offset, valid_items, Int2Type<false>(), can_vectorize, bodyFunc, args);
-            return BlockReduceT(temp_storage.reduce).Reduce(thread_aggregate, reduction_op, valid_items);
+            return BlockReduceT(temp_storage.reduce).Reduce(thread_aggregate, reduction_op, valid_items, bodyFunc, args);
         }
 
         // Consume first full tile of input
@@ -462,7 +494,7 @@ struct AgentReduce
         }
 
         // Compute block-wide reduction (all threads have valid items)
-        return BlockReduceT(temp_storage.reduce).Reduce(thread_aggregate, reduction_op);
+        return BlockReduceT(temp_storage.reduce).Reduce(thread_aggregate, reduction_op, bodyFunc, args);
 
     }
 

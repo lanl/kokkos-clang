@@ -128,6 +128,8 @@ struct WarpReduceSmem
     /**
      * Reduction step
      */
+
+    // ndm
     template <
         bool                ALL_LANES_VALID,        ///< Whether all lanes in each warp are contributing a valid fold of items
         int                 FOLDED_ITEMS_PER_LANE,  ///< Number of items folded into each lane
@@ -137,7 +139,9 @@ struct WarpReduceSmem
         T                   input,                  ///< [in] Calling thread's input
         int                 folded_items_per_warp,  ///< [in] Total number of valid items folded into each logical warp
         ReductionOp         reduction_op,           ///< [in] Reduction operator
-        Int2Type<STEP>      step)
+        Int2Type<STEP>      step,
+        void(*bodyFunc)(int, void*, void*),
+        void* args)
     {
         const int OFFSET = 1 << STEP;
 
@@ -147,11 +151,13 @@ struct WarpReduceSmem
         // Update input if peer_addend is in range
         if ((ALL_LANES_VALID && IS_POW_OF_TWO) || ((lane_id + OFFSET) * FOLDED_ITEMS_PER_LANE < folded_items_per_warp))
         {
-            T peer_addend = ThreadLoad<LOAD_VOLATILE>(&temp_storage.reduce[lane_id + OFFSET]);
-            input = reduction_op(input, peer_addend);
+            // ndm TODO - correct?
+            T addend;
+            bodyFunc(lane_id + OFFSET, args, &addend);
+            input = reduction_op(input, addend);
         }
 
-        return ReduceStep<ALL_LANES_VALID, FOLDED_ITEMS_PER_LANE>(input, folded_items_per_warp, reduction_op, Int2Type<STEP + 1>());
+        return ReduceStep<ALL_LANES_VALID, FOLDED_ITEMS_PER_LANE>(input, folded_items_per_warp, reduction_op, Int2Type<STEP + 1>(), bodyFunc, args);
     }
 
 
@@ -166,7 +172,9 @@ struct WarpReduceSmem
         T                   input,                  ///< [in] Calling thread's input
         int                 folded_items_per_warp,  ///< [in] Total number of valid items folded into each logical warp
         ReductionOp         reduction_op,           ///< [in] Reduction operator
-        Int2Type<STEPS>     step)
+        Int2Type<STEPS>     step,
+        void(*bodyFunc)(int, void*, void*),
+        void* args)
     {
         return input;
     }
@@ -328,9 +336,11 @@ struct WarpReduceSmem
     __device__ __forceinline__ T Reduce(
         T                   input,                  ///< [in] Calling thread's input
         int                 folded_items_per_warp,  ///< [in] Total number of valid items folded into each logical warp
-        ReductionOp         reduction_op)           ///< [in] Reduction operator
+        ReductionOp         reduction_op,
+        void(*bodyFunc)(int, void*, void*),
+        void* args)           ///< [in] Reduction operator
     {
-        return ReduceStep<ALL_LANES_VALID, FOLDED_ITEMS_PER_LANE>(input, folded_items_per_warp, reduction_op, Int2Type<0>());
+        return ReduceStep<ALL_LANES_VALID, FOLDED_ITEMS_PER_LANE>(input, folded_items_per_warp, reduction_op, Int2Type<0>(), bodyFunc, args);
     }
 
 
