@@ -319,6 +319,7 @@ struct AgentReduce
         OffsetT block_offset,                       ///< [in] Threadblock begin offset (inclusive)
         OffsetT block_end,                          ///< [in] Threadblock end offset (exclusive)
         Int2Type<CAN_VECTORIZE> can_vectorize,
+        int num_top_items,
         void(*bodyFunc)(int, void*, void*),
         void* args)      ///< Whether or not we can vectorize loads
     {
@@ -362,12 +363,13 @@ struct AgentReduce
     __device__ __forceinline__ T ConsumeRange(
         OffsetT block_offset,                       ///< [in] Threadblock begin offset (inclusive)
         OffsetT block_end,
+        int num_top_items,
         void(*bodyFunc)(int, void*, void*),
         void* args)                          ///< [in] Threadblock end offset (exclusive)
     {
         return (IsAligned(d_in + block_offset, Int2Type<ATTEMPT_VECTORIZATION>())) ?
-            ConsumeRange(block_offset, block_end, Int2Type<true && ATTEMPT_VECTORIZATION>(), bodyFunc, args) :
-            ConsumeRange(block_offset, block_end, Int2Type<false && ATTEMPT_VECTORIZATION>(), bodyFunc, args);
+            ConsumeRange(block_offset, block_end, Int2Type<true && ATTEMPT_VECTORIZATION>(), num_top_items, bodyFunc, args) :
+            ConsumeRange(block_offset, block_end, Int2Type<false && ATTEMPT_VECTORIZATION>(), num_top_items, bodyFunc, args);
     }
 
 

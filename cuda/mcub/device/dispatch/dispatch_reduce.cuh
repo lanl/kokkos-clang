@@ -138,6 +138,7 @@ __global__ void DeviceReduceSingleTileKernel(
     OffsetT                 num_items,                  ///< [in] Total number of input data items
     ReductionOpT            reduction_op,               ///< [in] Binary reduction functor
     T                       init,
+    int num_top_items,
     int kernelNum,
     void*                   args)                       ///< [in] The initial value of the reduction
 {
@@ -173,6 +174,7 @@ __global__ void DeviceReduceSingleTileKernel(
     T block_aggregate = AgentReduceT(temp_storage, d_in, reduction_op).ConsumeRange(
         OffsetT(0),
         num_items,
+        num_top_items,
         bodyFunc,
         args);
 
@@ -498,6 +500,7 @@ struct DispatchReduce :
     CUB_RUNTIME_FUNCTION __forceinline__
     cudaError_t InvokeSingleTile(
         SingleTileKernelT       single_tile_kernel,
+        int num_top_items,
         int kernelNum,
         void*                   args
         )     ///< [in] Kernel function pointer to parameterization of cub::DeviceReduceSingleTileKernel
@@ -532,6 +535,7 @@ struct DispatchReduce :
                 num_items,
                 reduction_op,
                 init,
+                num_top_items,
                 kernelNum,
                 args);
 
@@ -565,6 +569,7 @@ struct DispatchReduce :
         ReduceKernelT               reduce_kernel,          ///< [in] Kernel function pointer to parameterization of cub::DeviceReduceKernel
         SingleTileKernelT           single_tile_kernel,     ///< [in] Kernel function pointer to parameterization of cub::DeviceReduceSingleTileKernel
         FillAndResetDrainKernelT    prepare_drain_kernel,
+        int num_top_items,
         int kernelNum,
         void*                       args)   ///< [in] Kernel function pointer to parameterization of cub::FillAndResetDrainKernel
     {
@@ -686,6 +691,7 @@ struct DispatchReduce :
                 reduce_grid_size,
                 reduction_op,
                 init,
+                num_top_items,
                 kernelNum,
                 args);
 
@@ -724,7 +730,7 @@ struct DispatchReduce :
             // Small, single tile size
             return InvokeSingleTile<ActivePolicyT>(
                 DeviceReduceSingleTileKernel<MaxPolicyT, InputIteratorT, OutputIteratorT, OffsetT, ReductionOpT, T>,
-                kernelNum, args
+                num_items, kernelNum, args
                 );
         }
         else
@@ -733,7 +739,7 @@ struct DispatchReduce :
             return InvokePasses<ActivePolicyT>(
                 DeviceReduceKernel<typename DispatchReduce::MaxPolicy, InputIteratorT, T*, OffsetT, ReductionOpT>,
                 DeviceReduceSingleTileKernel<MaxPolicyT, T*, OutputIteratorT, OffsetT, ReductionOpT, T>,
-                FillAndResetDrainKernel<OffsetT>, kernelNum, args);
+                FillAndResetDrainKernel<OffsetT>, num_items, kernelNum, args);
         }
     }
 

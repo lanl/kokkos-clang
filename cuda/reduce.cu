@@ -22,14 +22,12 @@ using namespace std;
 using namespace cub;
 
 #ifdef IDEAS_TEST
-/*
   extern "C" __device__ void run(int index, void* args, void* result){
     double* ptr = (double*)result;
     *ptr = 1.0;
   }
-  */
 
-  extern "C" __device__ void run(int index, void* args, void* result);
+//  extern "C" __device__ void run(int index, void* args, void* result);
 #else
   extern "C" __device__ void run(int index, void* args, void* result);
 #endif
