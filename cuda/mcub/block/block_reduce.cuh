@@ -347,11 +347,9 @@ public:
     template <typename ReductionOp>
     __device__ __forceinline__ T Reduce(
         T               input,                      ///< [in] Calling thread's input
-        ReductionOp     reduction_op,
-        void(*bodyFunc)(int, void*, void*),
-        void* args)               ///< [in] Binary reduction functor 
+        ReductionOp     reduction_op)               ///< [in] Binary reduction functor 
     {
-        return InternalBlockReduce(temp_storage).template Reduce<true>(input, BLOCK_THREADS, reduction_op, bodyFunc, args);
+        return InternalBlockReduce(temp_storage).template Reduce<true>(input, BLOCK_THREADS, reduction_op);
     }
 
 
@@ -442,18 +440,16 @@ public:
     __device__ __forceinline__ T Reduce(
         T                   input,                  ///< [in] Calling thread's input
         ReductionOp         reduction_op,           ///< [in] Binary reduction functor 
-        int                 num_valid,
-        void(*bodyFunc)(int, void*, void*),
-        void* args)              ///< [in] Number of threads containing valid elements (may be less than BLOCK_THREADS)
+        int                 num_valid)              ///< [in] Number of threads containing valid elements (may be less than BLOCK_THREADS)
     {
         // Determine if we scan skip bounds checking
         if (num_valid >= BLOCK_THREADS)
         {
-            return InternalBlockReduce(temp_storage).template Reduce<true>(input, num_valid, reduction_op, bodyFunc, args);
+            return InternalBlockReduce(temp_storage).template Reduce<true>(input, num_valid, reduction_op);
         }
         else
         {
-            return InternalBlockReduce(temp_storage).template Reduce<false>(input, num_valid, reduction_op, bodyFunc, args);
+            return InternalBlockReduce(temp_storage).template Reduce<false>(input, num_valid, reduction_op);
         }
     }
 

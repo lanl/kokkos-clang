@@ -301,12 +301,12 @@ struct ChainedPolicy
    /// Specializes and dispatches op in accordance to the first policy in the chain of adequate PTX version
    template <typename FunctorT>
    CUB_RUNTIME_FUNCTION __forceinline__
-   static cudaError_t Invoke(int ptx_version, FunctorT &op, int kernelNum, void* args)
+   static cudaError_t Invoke(int ptx_version, FunctorT &op, int total_items, int kernelNum, void* args)
    {
        if (ptx_version < PTX_VERSION) {
-           return PrevPolicyT::Invoke(ptx_version, op, kernelNum, args);
+           return PrevPolicyT::Invoke(ptx_version, op, total_items, kernelNum, args);
        }
-       return op.template Invoke<PolicyT>(kernelNum, args);
+       return op.template Invoke<PolicyT>(total_items, kernelNum, args);
    }
 };
 
@@ -322,8 +322,8 @@ struct ChainedPolicy<PTX_VERSION, PolicyT, PolicyT>
     /// Specializes and dispatches op in accordance to the first policy in the chain of adequate PTX version
     template <typename FunctorT>
     CUB_RUNTIME_FUNCTION __forceinline__
-    static cudaError_t Invoke(int ptx_version, FunctorT &op, int kernelNum, void* args) {
-        return op.template Invoke<PolicyT>(kernelNum, args);
+    static cudaError_t Invoke(int ptx_version, FunctorT &op, int total_items, int kernelNum, void* args) {
+        return op.template Invoke<PolicyT>(total_items, kernelNum, args);
     }
 };
 

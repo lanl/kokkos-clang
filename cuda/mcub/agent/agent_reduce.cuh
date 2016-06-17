@@ -249,30 +249,20 @@ struct AgentReduce
         // Alias items as an array of VectorT and load it in striped fashion
         enum { WORDS =  ITEMS_PER_THREAD / VECTOR_LOAD_LENGTH };
 
-        // ndm
-        //T items[ITEMS_PER_THREAD];
-        T items[1];
+        T items[ITEMS_PER_THREAD];
 
-        //VectorT *vec_items = reinterpret_cast<VectorT*>(items);
+        VectorT *vec_items = reinterpret_cast<VectorT*>(items);
 
         // Vector Input iterator wrapper type (for applying cache modifier)
-        //T *d_in_unqualified = const_cast<T*>(d_in) + block_offset + (threadIdx.x * VECTOR_LOAD_LENGTH);
-        //CacheModifiedInputIterator<AgentReducePolicy::LOAD_MODIFIER, VectorT, OffsetT> d_vec_in(
-        //    reinterpret_cast<VectorT*>(d_in_unqualified));
+        T *d_in_unqualified = const_cast<T*>(d_in) + block_offset + (threadIdx.x * VECTOR_LOAD_LENGTH);
+        CacheModifiedInputIterator<AgentReducePolicy::LOAD_MODIFIER, VectorT, OffsetT> d_vec_in(
+            reinterpret_cast<VectorT*>(d_in_unqualified));
 
-        // ndm
-        //#pragma unroll
-        //for (int i = 0; i < WORDS; ++i)
-        //    vec_items[i] = d_vec_in[BLOCK_THREADS * i];
+        #pragma unroll
+        for (int i = 0; i < WORDS; ++i)
+            vec_items[i] = d_vec_in[BLOCK_THREADS * i];
 
         // Reduce items within each thread stripe
-        /*
-        thread_aggregate = (IS_FIRST_TILE) ?
-            ThreadReduce(items, reduction_op, bodyFunc, args) :
-            ThreadReduce(items, reduction_op, thread_aggregate, bodyFunc, args);
-        */
-
-        // ndm
         thread_aggregate = (IS_FIRST_TILE) ?
             ThreadReduce(items, reduction_op, bodyFunc, args) :
             ThreadReduce(items, reduction_op, thread_aggregate, bodyFunc, args);
@@ -284,6 +274,40 @@ struct AgentReduce
      * Consume a partial tile of input
      */
     template <int IS_FIRST_TILE, int CAN_VECTORIZE>
+    __device__ __forceinline__ void ConsumeSmallTile(
+        T                       &thread_aggregate,
+        OffsetT                 block_offset,       ///< The offset the tile to consume
+        int                     valid_items,        ///< The number of valid items in the tile
+        Int2Type<false>         is_full_tile,       ///< Whether or not this is a full tile
+        Int2Type<CAN_VECTORIZE> can_vectorize,
+        void(*bodyFunc)(int, void*, void*),
+        void* args)      ///< Whether or not we can vectorize loads
+    {
+        // Partial tile
+        int thread_offset = threadIdx.x;
+
+        // Read first item
+        if ((IS_FIRST_TILE) && (thread_offset < valid_items))
+        {
+            bodyFunc(block_offset + thread_offset, args, &thread_aggregate);
+            thread_offset += BLOCK_THREADS;
+        }
+
+        // Continue reading items (block-striped)
+        while (thread_offset < valid_items)
+        {
+            T addend;
+            bodyFunc(block_offset + thread_offset, args, &addend);
+
+            thread_aggregate = reduction_op(
+                thread_aggregate,
+                addend);
+
+            thread_offset += BLOCK_THREADS;
+        }
+    }
+
+    template <int IS_FIRST_TILE, int CAN_VECTORIZE>
     __device__ __forceinline__ void ConsumeTile(
         T                       &thread_aggregate,
         OffsetT                 block_offset,       ///< The offset the tile to consume
@@ -293,9 +317,6 @@ struct AgentReduce
         void(*bodyFunc)(int, void*, void*),
         void* args)      ///< Whether or not we can vectorize loads
     {
-        // ndm
-
-        /*
         // Partial tile
         int thread_offset = threadIdx.x;
 
@@ -312,28 +333,11 @@ struct AgentReduce
             thread_aggregate = reduction_op(
                 thread_aggregate,
                 d_wrapped_in[block_offset + thread_offset]);
-            thread_offset += BLOCK_THREADS;
-        }
-        */
 
-        int thread_offset = threadIdx.x;
-
-        // Read first item
-        if (thread_offset < valid_items)
-        {
-            bodyFunc(block_offset + thread_offset, args, &thread_aggregate);
-            thread_offset += BLOCK_THREADS;
-        }
-
-        while (thread_offset < valid_items)
-        {
-            T addend;
-            bodyFunc(block_offset + thread_offset, args, &addend);
-
-            thread_aggregate = reduction_op(thread_aggregate, addend);
             thread_offset += BLOCK_THREADS;
         }
     }
+
 
 
     //---------------------------------------------------------------
@@ -351,7 +355,7 @@ struct AgentReduce
         OffsetT block_offset,                       ///< [in] Threadblock begin offset (inclusive)
         OffsetT block_end,                          ///< [in] Threadblock end offset (exclusive)
         Int2Type<CAN_VECTORIZE> can_vectorize,
-        int num_top_items,
+        int total_items,
         void(*bodyFunc)(int, void*, void*),
         void* args)      ///< Whether or not we can vectorize loads
     {
@@ -361,8 +365,15 @@ struct AgentReduce
         {
             // First tile isn't full (not all threads have valid items)
             int valid_items = block_end - block_offset;
-            ConsumeTile<true>(thread_aggregate, block_offset, valid_items, Int2Type<false>(), can_vectorize, bodyFunc, args);
-            return BlockReduceT(temp_storage.reduce).Reduce(thread_aggregate, reduction_op, valid_items, bodyFunc, args);
+
+            if(total_items < 512){
+                ConsumeSmallTile<true>(thread_aggregate, block_offset, valid_items, Int2Type<false>(), can_vectorize, bodyFunc, args);
+            }
+            else{
+                ConsumeTile<true>(thread_aggregate, block_offset, valid_items, Int2Type<false>(), can_vectorize, bodyFunc, args);
+            }    
+
+            return BlockReduceT(temp_storage.reduce).Reduce(thread_aggregate, reduction_op, valid_items);
         }
 
         // At least one full block
@@ -384,7 +395,7 @@ struct AgentReduce
         }
 
         // Compute block-wide reduction (all threads have valid items)
-        return BlockReduceT(temp_storage.reduce).Reduce(thread_aggregate, reduction_op, bodyFunc, args);
+        return BlockReduceT(temp_storage.reduce).Reduce(thread_aggregate, reduction_op);
     }
 
 
@@ -395,13 +406,13 @@ struct AgentReduce
     __device__ __forceinline__ T ConsumeRange(
         OffsetT block_offset,                       ///< [in] Threadblock begin offset (inclusive)
         OffsetT block_end,
-        int num_top_items,
+        int total_items,
         void(*bodyFunc)(int, void*, void*),
         void* args)                          ///< [in] Threadblock end offset (exclusive)
     {
         return (IsAligned(d_in + block_offset, Int2Type<ATTEMPT_VECTORIZATION>())) ?
-            ConsumeRange(block_offset, block_end, Int2Type<true && ATTEMPT_VECTORIZATION>(), num_top_items, bodyFunc, args) :
-            ConsumeRange(block_offset, block_end, Int2Type<false && ATTEMPT_VECTORIZATION>(), num_top_items, bodyFunc, args);
+            ConsumeRange(block_offset, block_end, Int2Type<true && ATTEMPT_VECTORIZATION>(), total_items, bodyFunc, args) :
+            ConsumeRange(block_offset, block_end, Int2Type<false && ATTEMPT_VECTORIZATION>(), total_items, bodyFunc, args);
     }
 
 
@@ -451,7 +462,7 @@ struct AgentReduce
             // First tile isn't full (not all threads have valid items)
             int valid_items = num_items - block_offset;
             ConsumeTile<true>(thread_aggregate, block_offset, valid_items, Int2Type<false>(), can_vectorize, bodyFunc, args);
-            return BlockReduceT(temp_storage.reduce).Reduce(thread_aggregate, reduction_op, valid_items, bodyFunc, args);
+            return BlockReduceT(temp_storage.reduce).Reduce(thread_aggregate, reduction_op, valid_items);
         }
 
         // Consume first full tile of input
@@ -494,7 +505,7 @@ struct AgentReduce
         }
 
         // Compute block-wide reduction (all threads have valid items)
-        return BlockReduceT(temp_storage.reduce).Reduce(thread_aggregate, reduction_op, bodyFunc, args);
+        return BlockReduceT(temp_storage.reduce).Reduce(thread_aggregate, reduction_op);
 
     }
 

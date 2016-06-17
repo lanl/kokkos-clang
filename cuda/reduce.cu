@@ -62,6 +62,9 @@ namespace{
       CUresult err = cuMemAlloc(&result_, sizeof(T));
       check(err);
 
+      err = cuMemAlloc(&in_, sizeof(T) * size_);
+      check(err);
+
       T* in = NULL;
       T* temp = NULL;
       T* result = NULL;
@@ -74,7 +77,7 @@ namespace{
     }
 
     void run(CUdeviceptr ptr, void* resultPtr){
-      T* in = (T*)ptr;
+      T* in = (T*)in_;
       T* temp = (T*)temp_;
       T* result = (T*)result_;
 
@@ -87,6 +90,7 @@ namespace{
     
     CUdeviceptr result_;
     CUdeviceptr temp_;
+    CUdeviceptr in_;
 
     void* tempStorage_;
     size_t tempStorageBytes_;
