@@ -368,7 +368,7 @@ struct AgentReduce
             // First tile isn't full (not all threads have valid items)
             int valid_items = block_end - block_offset;
 
-            if(total_items < 512){
+            if(total_items < TILE_ITEMS){
                 ConsumeSmallTile<true>(thread_aggregate, block_offset, valid_items, Int2Type<false>(), can_vectorize, bodyFunc, args);
             }
             else{
@@ -465,7 +465,7 @@ struct AgentReduce
             // First tile isn't full (not all threads have valid items)
             int valid_items = num_items - block_offset;
 
-            if(valid_items < 512){
+            if(valid_items < TILE_ITEMS){
                 ConsumeSmallTile<true>(thread_aggregate, block_offset, valid_items, Int2Type<false>(), can_vectorize, bodyFunc, args);
             }
             else{
