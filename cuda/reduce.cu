@@ -62,9 +62,6 @@ namespace{
       CUresult err = cuMemAlloc(&result_, sizeof(T));
       check(err);
 
-      err = cuMemAlloc(&in_, sizeof(T) * size_);
-      check(err);
-
       T* in = NULL;
       T* temp = NULL;
       T* result = NULL;
@@ -76,8 +73,8 @@ namespace{
       check(err);
     }
 
-    void run(CUdeviceptr ptr, void* resultPtr){
-      T* in = (T*)in_;
+    void run(void* resultPtr){
+      T* in = NULL;
       T* temp = (T*)temp_;
       T* result = (T*)result_;
 
@@ -90,7 +87,6 @@ namespace{
     
     CUdeviceptr result_;
     CUdeviceptr temp_;
-    CUdeviceptr in_;
 
     void* tempStorage_;
     size_t tempStorageBytes_;
@@ -102,17 +98,15 @@ namespace{
 
   template<class T>
   void sum_(size_t kernel,
-            CUdeviceptr ptr,
             size_t size,
             void* args,
             void* resultPtr){
     Reduce<T>* r = new Reduce<T>(kernel, size, args);
-    r->run(ptr, resultPtr);
+    r->run(resultPtr);
   }
 
   template<class T>
   void product_(size_t kernel,
-                CUdeviceptr ptr,
                 size_t size,
                 void* args,
                 void* resultPtr){
@@ -124,7 +118,6 @@ namespace{
 namespace ideas{
 
 void reduce(size_t kernel,
-            CUdeviceptr ptr,
             size_t size,
             size_t scalarBytes,
             bool isFloat,
@@ -136,27 +129,27 @@ void reduce(size_t kernel,
     case 8:
       if(isFloat){
         if(isSum){
-          sum_<double>(kernel, ptr, size, args, resultPtr);
+          sum_<double>(kernel, size, args, resultPtr);
         }
         else{
-          product_<double>(kernel, ptr, size, args, resultPtr);
+          product_<double>(kernel, size, args, resultPtr);
         }
       }
       else{
         if(isSigned){
           if(isSum){
-            sum_<int64_t>(kernel, ptr, size, args, resultPtr);
+            sum_<int64_t>(kernel, size, args, resultPtr);
           }
           else{
-            product_<int64_t>(kernel, ptr, size, args, resultPtr);
+            product_<int64_t>(kernel, size, args, resultPtr);
           }
         }
         else{
           if(isSum){
-            sum_<uint64_t>(kernel, ptr, size, args, resultPtr);
+            sum_<uint64_t>(kernel, size, args, resultPtr);
           }
           else{
-            product_<uint64_t>(kernel, ptr, size, args, resultPtr);
+            product_<uint64_t>(kernel, size, args, resultPtr);
           }
         }
       }
@@ -164,27 +157,27 @@ void reduce(size_t kernel,
     case 4:
       if(isFloat){
         if(isSum){
-          sum_<float>(kernel, ptr, size, args, resultPtr);
+          sum_<float>(kernel, size, args, resultPtr);
         }
         else{
-          product_<float>(kernel, ptr, size, args, resultPtr);
+          product_<float>(kernel, size, args, resultPtr);
         }
       }
       else{
         if(isSigned){
           if(isSum){
-            sum_<int32_t>(kernel, ptr, size, args, resultPtr);
+            sum_<int32_t>(kernel, size, args, resultPtr);
           }
           else{
-            product_<int32_t>(kernel, ptr, size, args, resultPtr);
+            product_<int32_t>(kernel, size, args, resultPtr);
           }
         }
         else{
           if(isSum){
-            sum_<uint32_t>(kernel, ptr, size, args, resultPtr);
+            sum_<uint32_t>(kernel, size, args, resultPtr);
           }
           else{
-            product_<uint32_t>(kernel, ptr, size, args, resultPtr);
+            product_<uint32_t>(kernel, size, args, resultPtr);
           }
         }
       }
@@ -196,18 +189,18 @@ void reduce(size_t kernel,
       else{
         if(isSigned){
           if(isSum){
-            sum_<int16_t>(kernel, ptr, size, args, resultPtr);
+            sum_<int16_t>(kernel, size, args, resultPtr);
           }
           else{
-            product_<int16_t>(kernel, ptr, size, args, resultPtr);
+            product_<int16_t>(kernel, size, args, resultPtr);
           }
         }
         else{
           if(isSum){
-            sum_<uint16_t>(kernel, ptr, size, args, resultPtr);
+            sum_<uint16_t>(kernel, size, args, resultPtr);
           }
           else{
-            product_<uint16_t>(kernel, ptr, size, args, resultPtr);
+            product_<uint16_t>(kernel, size, args, resultPtr);
           }
         }
       }

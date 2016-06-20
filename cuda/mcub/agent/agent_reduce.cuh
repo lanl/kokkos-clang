@@ -251,6 +251,7 @@ struct AgentReduce
 
         T items[ITEMS_PER_THREAD];
 
+/*
         VectorT *vec_items = reinterpret_cast<VectorT*>(items);
 
         // Vector Input iterator wrapper type (for applying cache modifier)
@@ -261,6 +262,7 @@ struct AgentReduce
         #pragma unroll
         for (int i = 0; i < WORDS; ++i)
             vec_items[i] = d_vec_in[BLOCK_THREADS * i];
+*/
 
         // Reduce items within each thread stripe
         thread_aggregate = (IS_FIRST_TILE) ?

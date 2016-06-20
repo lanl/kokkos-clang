@@ -15,7 +15,6 @@ using namespace std;
 namespace ideas{
 
   extern void reduce(size_t kernel,
-              CUdeviceptr ptr,
               size_t size,
               size_t scalarBytes,
               bool isFloat,
@@ -39,11 +38,9 @@ int main(int argc, char** argv){
   err = cuCtxCreate(&context, 0, device);
   check(err);
 
-  CUdeviceptr ptr;
-
   double r = 0;
 
-  ideas::reduce(0, ptr, 256, 8, true, true, true, NULL, &r);
+  ideas::reduce(0, 256, 8, true, true, true, NULL, &r);
 
   cout << "r = " << r << endl;
 
