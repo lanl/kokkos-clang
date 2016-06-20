@@ -36,14 +36,13 @@ __PRETTY_FUNCTION__ << ": " << (X) << std::endl
 namespace ideas{
   
   extern void reduce(size_t kernel,
-              CUdeviceptr ptr,
-              size_t size,
-              size_t scalarBytes,
-              bool isFloat,
-              bool isSigned,
-              bool isSum,
-              void* args,
-              void* resultPtr);
+                     size_t size,
+                     size_t scalarBytes,
+                     bool isFloat,
+                     bool isSigned,
+                     bool isSum,
+                     void* args,
+                     void* resultPtr);
 
 } // namespace ideas
 
@@ -533,6 +532,14 @@ namespace{
       uint32_t size_;
     };
 
+    struct Var{
+      Var(void* hostPtr, size_t size)
+      : hostPtr(hostPtr), size(size){}
+
+      void* hostPtr;
+      size_t size; 
+    };
+
     class Kernel{
     public:
       Kernel(char* ptx,
@@ -604,8 +611,8 @@ namespace{
       }
 
       void addVar(void* varPtr, size_t size){
-        (void)size;
-        vars_.push_back(varPtr);
+        auto v = new Var(varPtr, size);
+        vars_.push_back(v);
       }
 
       void run(uint32_t n, void* reduceRetPtr){
@@ -661,8 +668,8 @@ namespace{
             kernelParams_.push_back(&array->devPtr());
           }
 
-          for(void* varPtr : vars_){
-            kernelParams_.push_back(varPtr);
+          for(Var* var : vars_){
+            kernelParams_.push_back(var->hostPtr);
           }
 
           kernelParams_.push_back(&n_);
@@ -712,7 +719,50 @@ namespace{
         reduceRetPtr_ = reduceRetPtr;
         n_ = n;
         CUdeviceptr ptr;
-        //ideas::reduce(0, ptr, n_, 8, true, false, true, nullptr, reduceRetPtr_);
+        
+        vector<CUdeviceptr> fields;
+
+        if(!ready_){
+          for(View* view : views_){
+            fields.push_back(view->devPtr());
+            
+            auto& dims = view->dims();
+
+            CUresult err = cuMemAlloc(&view->dimsPtr(), dims.size() * 4);
+            check(err);
+
+            err = cuMemcpyHtoD(view->dimsPtr(), dims.data(),
+                               dims.size() * 4);
+            check(err);
+
+            fields.push_back(view->dimsPtr());
+          }
+
+          for(Array* array : arrays_){
+            fields.push_back(array->devPtr());
+          }
+
+          for(Var* var : vars_){
+            CUdeviceptr devPtr;
+            CUresult err = cuMemAlloc(&devPtr, var->size);
+            check(err);
+
+            fields.push_back(devPtr);
+          }
+
+          size_t bytes = fields.size() * sizeof(CUdeviceptr);
+
+          CUresult err = cuMemAlloc(&reduceArgsDevPtr_, bytes);
+          check(err);
+
+          err = cuMemcpyHtoD(reduceArgsDevPtr_, fields.data(), bytes);
+          check(err);
+
+          ready_ = true;
+        }
+
+        ideas::reduce(0, n_, reduceSize_, reduceFloat_, reduceSigned_,
+                      reduceSum_, (void*)reduceArgsDevPtr_, reduceRetPtr_);
       }    
       
       bool ready(){
@@ -723,7 +773,7 @@ namespace{
       using KernelParams_ = vector<void*>;
       using ViewVec_ = vector<View*>;
       using ArrayVec_ = vector<Array*>;
-      using VarVec_ = vector<void*>;      
+      using VarVec_ = vector<Var*>;      
 
       CUmodule module_;    
       CUfunction function_;
@@ -745,6 +795,7 @@ namespace{
       uint32_t n_;
       uint32_t lastSize_;
       size_t gridDimX_;
+      CUdeviceptr reduceArgsDevPtr_;
     };
 
     CUDARuntime(){
