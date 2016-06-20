@@ -451,6 +451,7 @@ struct AgentReduce
         int                     num_items,          ///< Total number of input items
         GridQueue<OffsetT>      queue,              ///< Queue descriptor for assigning tiles of work to thread blocks
         Int2Type<CAN_VECTORIZE> can_vectorize,
+        int total_items,
         void(*bodyFunc)(int, void*, void*),
         void* args)      ///< Whether or not we can vectorize loads
     {
@@ -463,7 +464,14 @@ struct AgentReduce
         {
             // First tile isn't full (not all threads have valid items)
             int valid_items = num_items - block_offset;
-            ConsumeTile<true>(thread_aggregate, block_offset, valid_items, Int2Type<false>(), can_vectorize, bodyFunc, args);
+
+            if(valid_items < 512){
+                ConsumeSmallTile<true>(thread_aggregate, block_offset, valid_items, Int2Type<false>(), can_vectorize, bodyFunc, args);
+            }
+            else{
+                ConsumeTile<true>(thread_aggregate, block_offset, valid_items, Int2Type<false>(), can_vectorize, bodyFunc, args);
+            }
+
             return BlockReduceT(temp_storage.reduce).Reduce(thread_aggregate, reduction_op, valid_items);
         }
 
@@ -522,12 +530,13 @@ struct AgentReduce
         GridEvenShare<OffsetT>          &even_share,        ///< [in] GridEvenShare descriptor
         GridQueue<OffsetT>              &queue,             ///< [in,out] GridQueue descriptor
         Int2Type<GRID_MAPPING_DYNAMIC>  is_dynamic,
+        int total_items,
         void(*bodyFunc)(int, void*, void*),
         void* args)         ///< [in] Marker type indicating this is a dynamic mapping
     {
         return (IsAligned(d_in, Int2Type<ATTEMPT_VECTORIZATION>())) ?
-            ConsumeTiles(num_items, queue, Int2Type<true && ATTEMPT_VECTORIZATION>(), bodyFunc, args) :
-            ConsumeTiles(num_items, queue, Int2Type<false && ATTEMPT_VECTORIZATION>(), bodyFunc, args);
+            ConsumeTiles(num_items, queue, Int2Type<true && ATTEMPT_VECTORIZATION>(), total_items, bodyFunc, args) :
+            ConsumeTiles(num_items, queue, Int2Type<false && ATTEMPT_VECTORIZATION>(), total_items, bodyFunc, args);
     }
 
 };

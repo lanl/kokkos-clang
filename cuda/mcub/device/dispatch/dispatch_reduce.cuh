@@ -78,6 +78,7 @@ __global__ void DeviceReduceKernel(
     GridEvenShare<OffsetT>  even_share,                 ///< [in] Even-share descriptor for mapping an equal number of tiles onto each thread block
     GridQueue<OffsetT>      queue,                      ///< [in] Drain queue descriptor for dynamically mapping tile data onto thread blocks
     ReductionOpT            reduction_op,
+    int total_items,
     int kernelNum,
     //typename std::iterator_traits<InputIteratorT>::value_type(*fp)(int, void*),
     void* args)               ///< [in] Binary reduction functor
@@ -111,6 +112,7 @@ __global__ void DeviceReduceKernel(
         even_share,
         queue,
         Int2Type<ChainedPolicyT::ActivePolicy::ReducePolicy::GRID_MAPPING>(),
+        total_items,
         bodyFunc,
         args);
 
@@ -669,6 +671,7 @@ struct DispatchReduce :
                 even_share,
                 queue,
                 reduction_op,
+                total_items,
                 kernelNum,
                 args);
 

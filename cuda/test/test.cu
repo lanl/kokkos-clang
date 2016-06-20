@@ -40,7 +40,7 @@ int main(int argc, char** argv){
 
   double r = 0;
 
-  ideas::reduce(0, 256, 8, true, true, true, NULL, &r);
+  ideas::reduce(0, 1021, 8, true, true, true, NULL, &r);
 
   cout << "r = " << r << endl;
 
