@@ -986,7 +986,7 @@ namespace{
 
       if(reducePtr){
         //kernel->runReduce(n, reducePtr);
-        kernel->run(n, nullptr);
+        kernel->run(n, reducePtr);
       }
       else{
         kernel->run(n, nullptr);
