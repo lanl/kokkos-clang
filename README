@@ -46,7 +46,8 @@ Nick Moss (nickm@lanl.gov) and Pat McCormick (pat@lanl.gov)
 
 -A Clang-based compiler for compiling Kokkos code (with no syntactical
 differences) with the aim of generating optimized code for specific
-targets such a multithreaded and GPU (NVIDIA/CUDA).
+targets such a multithreaded and GPU (NVIDIA/CUDA) and preserving
+domain awareness.
 
 -Runtime for thread pooling, synching, function queueing, and GPU -
 run kernel from PTX, manage device memory for Kokkos views and
