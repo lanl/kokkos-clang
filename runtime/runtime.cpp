@@ -18,13 +18,9 @@
 #include <cuda.h>
 
 using namespace std;
-//using namespace ideas;
 
-#define ndump(X) cout << __FILE__ << ":" << __LINE__ << ": " << \
+#define np(X) cout << __FILE__ << ":" << __LINE__ << ": " << \
 __PRETTY_FUNCTION__ << ": " << #X << " = " << (X) << std::endl
-
-#define nlog(X) std::cout << __FILE__ << ":" << __LINE__ << ": " << \
-__PRETTY_FUNCTION__ << ": " << (X) << std::endl
 
 #define check(err) if(err != CUDA_SUCCESS){ \
       const char* s; \
@@ -270,9 +266,7 @@ namespace{
     using ThreadVec = std::vector<thread*>;
 
     Queue queue_;
-
     mutex mutex_;
-
     ThreadVec threadVec_;
   };
 
@@ -648,12 +642,6 @@ namespace{
             
             auto& dims = view->dims();
 
-            /*
-            for(auto di : dims){
-              ndump(di);
-            }
-            */
-
             CUresult err = cuMemAlloc(&view->dimsPtr(), dims.size() * 4);
             check(err);
 
@@ -688,22 +676,9 @@ namespace{
                              sharedMemBytes, stream_,
                              kernelParams_.data(), nullptr);
 
-        //ndump(kernelParams_.size());
-
         check(err);
 
         lastSize_ = n;
-
-        // ndm - fix
-        /*
-        if(reduceRetPtr_){
-          cuStreamSynchronize(stream_);
-
-          reduce(hostPtr_, reducePtr_, gridDimX_, reduceSize_, reduceFloat_,
-                 reduceSigned_, reduceSum_, reduceRetPtr_);
-        }
-        */ 
-
       }
 
       void await(){
@@ -803,8 +778,7 @@ namespace{
     }
 
     ~CUDARuntime(){
-      //CUresult err = cuCtxDestroy(context_);
-      //check(err);
+
     }
 
     void init(){
