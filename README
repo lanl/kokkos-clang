@@ -1,53 +1,106 @@
-IDEAS Kokkos/Compiler Project
+Copyright (c) 2016, Los Alamos National Security, LLC All rights
+reserved. Copyright 2016. Los Alamos National Security, LLC. This
+software was produced under U.S. Government contract DE-AC52-06NA25396
+for Los Alamos National Laboratory (LANL), which is operated by Los
+Alamos National Security, LLC for the U.S. Department of Energy. The
+U.S. Government has rights to use, reproduce, and distribute this
+software.  NEITHER THE GOVERNMENT NOR LOS ALAMOS NATIONAL SECURITY,
+LLC MAKES ANY WARRANTY, EXPRESS OR IMPLIED, OR ASSUMES ANY LIABILITY
+FOR THE USE OF THIS SOFTWARE.  If software is modified to produce
+derivative works, such modified software should be clearly marked, so
+as not to confuse it with the version available from LANL.
+ 
+Additionally, redistribution and use in source and binary forms, with
+or without modification, are permitted provided that the following
+conditions are met: 1.       Redistributions of source code must
+retain the above copyright notice, this list of conditions and the
+following disclaimer. 2.      Redistributions in binary form must
+reproduce the above copyright notice, this list of conditions and the
+following disclaimer in the documentation and/or other materials
+provided with the distribution. 3.      Neither the name of Los Alamos
+National Security, LLC, Los Alamos National Laboratory, LANL, the U.S.
+Government, nor the names of its contributors may be used to endorse
+or promote products derived from this software without specific prior
+written permission.
+ 
+THIS SOFTWARE IS PROVIDED BY LOS ALAMOS NATIONAL SECURITY, LLC AND
+CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING,
+BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL LOS
+ALAMOS NATIONAL SECURITY, LLC OR CONTRIBUTORS BE LIABLE FOR ANY
+DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
+ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-Pat McCormick (pat@lanl.gov), Nick Moss (nickm@lanl.gov)
+====== Kokkos GPU Compiler A.K.A Kokkos Clang
+
+Developed by:
+
+Nick Moss (nickm@lanl.gov) and Pat McCormick (pat@lanl.gov)
 
 ====== Project Description / Status
 
--A Clang-based compiler for compiling Kokkos code (with no syntactical differences)
-with the aim of generating highly optimized code for specific targets
-such a multithreaded and GPU (NVIDIA/CUDA).
+-A Clang-based compiler for compiling Kokkos code (with no syntactical
+differences) with the aim of generating optimized code for specific
+targets such a multithreaded and GPU (NVIDIA/CUDA).
 
--Runtime for thread pooling, synching, function queueing, and GPU - run kernel
-from PTX, manage device memory for Kokkos views, and device <-> host memory
-transfer.
+-Runtime for thread pooling, synching, function queueing, and GPU -
+run kernel from PTX, manage device memory for Kokkos views and
+dynamically allocated C++ arrays, and device <-> host memory transfer.
 
--Both multithreaded and GPU modes intercept the code generation process
-that would normally be followed when encountering a parallel for - analyze C++
-templated parts of the AST to pull out the compile-time information needed 
-for interface to the runtime.
+-Both multithreaded and GPU modes intercept the code generation paths
+that would normally be followed when encountering a parallel
+for/reduce - analyze C++ templated parts of the AST to pull out the
+compile-time information needed for interface to the runtime.
 
--Multithreaded mode generates "closures" for a parallel for's
-which wrap the arguments and values and generate and IR function -> 
-queuable functions to the runtime.
+-Multithreaded mode generates "closures" for a parallel for's which
+wrap the arguments and values and generate and IR function ->
+queueable functions to the runtime.
 
--GPU mode generates a kernel for each parallel for -- and IR function w/ 
-transformations which gets code-generated to PTX and embedded in the module - 
-use CUDA driver library to launch kernels, allocate memory, etc.
+-GPU mode generates a kernel for each parallel for -- and IR function
+w/ transformations which gets code-generated to PTX and embedded in
+the module - uses CUDA driver library to launch kernels, allocate
+memory, etc.
 
 -GPU: translate CPU-side Kokkos views runtime and static dimensions
 into device memory - translate view indexing into cuda array index
 
--GPU: runtime manages device memory for Kokkos views - analyze read/write
-patterns in the kernels and copies memory to/from device only as needed - 
-device memory for shared views across kernels is reused/persistent
+-GPU: runtime manages device memory for Kokkos views - analyze
+read/write patterns in the kernels and copies memory to/from device
+only as needed -  device memory for shared views across kernels is
+reused/persistent. CFG and AST visitor analysis for read/write
+dependence, auto-copy views/arrays to/from device memory, also used
+for asynchronous parallel for/reduce launches using CUDA streams.
 
--Currently looking into dynamic parallelism for nested forall launches.
+-Currently looking into dynamic parallelism for nested forall
+-launches.
 
--Powerful LLVM foundation - each kernel is IR which can be analyzed and
-manipulated - possibile further optimizations: warp/divergence, shared memory,
-better overlap IO, different memory layouts for views, view slicing, module wide optimizations across different kernels... many possibilities exist for
-transforming/optimizing the generated code without requiring any changes
-or instrumentation to the user's original Kokkkos code.
+-Established a flexible LLVM foundation - each kernel is IR which can
+be analyzed and manipulated - possibile further optimizations:
+warp/divergence, shared memory, better overlap IO, different memory
+layouts for views, view slicing, module wide optimizations across
+different kernels. Many possibilities exist for
+transforming/optimizing the generated code without requiring any
+changes or instrumentation to the user's original Kokkkos code.
 
 ====== Code
 
   -runtime resides in top-level runtime directory
 
-  -to locate the places within LLVM/Clang which were modified/extended, 
-    grep for "=== ideas"
+  -to locate the places within LLVM/Clang which were
+modified/extended, grep for "=== ideas"
 
-====== Building
+====== Known problems
+
+The compiled Clang may not properly find system C++ headers so the
+-isystem and proper include paths may have to be specified. See the
+regression tests.
+
+====== Building the Compiler
 
   -from the top-level ideas directory, e.g:
 
@@ -55,14 +108,13 @@ or instrumentation to the user's original Kokkkos code.
 
   -cd build
 
-  -cmake ..
+  -cmake .. OR cmake -DCMAKE_BUILD_TYPE=RELEASE ..
 
   -make
 
 ====== Running
 
-  -The build process creates a C++/Clang compiler in build/llvm/bin which can be used
-  just like an ordinary clang++ compiler
+  -The build process creates a C++/Clang compiler in build/llvm/bin
+  -which can be used just like the ordinary clang++ compiler
 
-  -When run on Kokko's code containing parallel for's in main() it will
-  generate optimized code for either multithreaded or GPU/NVIDIA/CUDA
+  -Regression tests are located in test/regress
