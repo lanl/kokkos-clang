@@ -46,8 +46,6 @@ namespace{
 
   const size_t NUM_THREADS = 16;
 
-  const size_t DEFAULT_THREADS = 128;
-
   const uint8_t FIELD_READ = 0x01;
   const uint8_t FIELD_WRITE = 0x02;
 
@@ -546,8 +544,7 @@ namespace{
           reduceFloat_(reduceFloat),
           reduceSigned_(reduceSigned),
           reduceSum_(reduceSum),
-          lastSize_(0),
-          numThreads_(DEFAULT_THREADS){
+          lastSize_(0){
         
         CUresult err = cuModuleLoadData(&module_, (void*)ptx);
         check(err);
@@ -573,8 +570,7 @@ namespace{
           reduceFloat_(reduceFloat),
           reduceSigned_(reduceSigned),
           reduceSum_(reduceSum),
-          lastSize_(0),
-          numThreads_(DEFAULT_THREADS){
+          lastSize_(0){
         
         // ndm - finish implementing
 
@@ -1055,6 +1051,10 @@ extern "C"{
     delete s;
   }
 
+  void __ideas_debug1(void* ptr){
+
+  }
+
   bool __ideas_cuda_init_kernel(uint32_t kernelId,
                                 char* ptx,
                                 uint32_t reduceSize,
@@ -1132,10 +1132,6 @@ extern "C"{
 
   void __ideas_cuda_await_kernel(uint32_t kernelId){
     return _cudaRuntime.awaitKernel(kernelId);
-  }
-
-  void __ideas_debug1(void* ptr){
-
   }
 
 } // extern "C"
