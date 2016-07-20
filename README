@@ -40,6 +40,29 @@ This code is unclassified and has been assigned LA-CC-16-054.
 
 ====== Kokkos GPU Compiler A.K.A Kokkos Clang
 
+The Kokkos Clang compiler is a version of the Clang C++ compiler that
+has been modified to perform targeted code generation for Kokkos
+constructs in the goal of generating highly optimized code and to
+provide semantic (domain) awareness throughout the compilation
+toolchain of these constructs such as parallel for and parallel
+reduce. This approach is taken to explore the possibilities of
+exposing the developer’s intentions to the underlying compiler
+infrastructure (e.g. optimization and analysis passes within the
+middle stages of the compiler) instead of relying solely on the
+restricted capabilities of C++ template metaprogramming. To date our
+current activities have focused on correct GPU code generation and
+thus we have not yet focused on improving overall performance.  The
+compiler is implemented by recognizing specific (syntactic) Kokkos
+constructs in order to bypass normal template expansion mechanisms and
+instead use the semantic knowledge of Kokkos to directly generate code
+in the compiler’s intermediate representation (IR); which is then
+translated into an NVIDIA-centric GPU program and supporting runtime
+calls. In addition, by capturing and maintaining the higher-level
+semantics of Kokkos directly within the lower levels of the compiler
+has the potential for significantly improving the ability of the
+compiler to communicate with the developer in the terms of their
+original programming model/semantics.
+
 Developed by:
 
 Nick Moss (nickm@lanl.gov) and Pat McCormick (pat@lanl.gov)
@@ -92,10 +115,10 @@ changes or instrumentation to the user's original Kokkkos code.
 
 ====== Code
 
-  -runtime resides in top-level runtime directory
+-runtime resides in top-level runtime directory
 
-  -to locate the places within LLVM/Clang which were
-modified/extended, grep for "=== ideas"
+-to locate the places within LLVM/Clang which were modified/extended, 
+grep for "=== ideas"
 
 ====== Known problems
 
@@ -105,19 +128,21 @@ regression tests.
 
 ====== Building the Compiler
 
-  -from the top-level ideas directory, e.g:
+-Clone Kokkos from https://github.com/kokkos/kokkos and place the 'kokkos' directory at the top-level directory of kokkos-clang
 
-  -mkdir build
+-from the top-level ideas directory, e.g:
 
-  -cd build
+-mkdir build
 
-  -cmake .. OR cmake -DCMAKE_BUILD_TYPE=RELEASE ..
+-cd build
 
-  -make
+-cmake .. OR cmake -DCMAKE_BUILD_TYPE=RELEASE ..
+
+-make
 
 ====== Running
 
-  -The build process creates a C++/Clang compiler in build/llvm/bin
-  -which can be used just like the ordinary clang++ compiler
+-The build process creates a C++/Clang compiler in build/llvm/bin which 
+can be used just like the ordinary clang++ compiler
 
-  -Regression tests are located in test/regress
+-Regression tests are located in test/regress
