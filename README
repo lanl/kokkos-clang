@@ -36,6 +36,9 @@ IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
 OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
 ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+Kokkos Clang was developed as part of the IDEAS (Interoperable Design of
+Extreme-scale Application Software) project funded by the DOE Office of Science.
+
 This code is unclassified and has been assigned LA-CC-16-054.
 
 ====== Kokkos GPU Compiler A.K.A Kokkos Clang
