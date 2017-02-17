@@ -135,6 +135,66 @@ RValue CodeGenFunction::EmitCXXMemberOrOperatorMemberCallExpr(
     const Expr *Base) {
   assert(isa<CXXMemberCallExpr>(CE) || isa<CXXOperatorCallExpr>(CE));
 
+  // +===== ideas
+  if(const DeclRefExpr* dr = dyn_cast<DeclRefExpr>(Base)){
+    if(const VarDecl* vd = dyn_cast<VarDecl>(dr->getDecl())){
+      QualType ct = vd->getType().getCanonicalType();
+      if(const RecordType* rt = dyn_cast<RecordType>(ct.getTypePtr())){
+        (void)rt;
+        if(ct.getAsString().find("class Kokkos::View") == 0){
+          if(const CXXOperatorCallExpr* c = dyn_cast<CXXOperatorCallExpr>(CE)){
+            if(c->getOperator() == OO_Call){
+              llvm::Value* viewPtr = parallelForParamMap_[vd];
+              assert(viewPtr && "failed to map parallel for param");
+
+              llvm::Value* viewDimsPtr = parallelForParamDimMap_[vd];
+              assert(viewDimsPtr && "failed to map parallel for dims param");
+
+              //const ViewInfo& info = viewInfoMap_[vd];
+
+              size_t n = c->getNumArgs();
+
+              std::vector<llvm::Value*> indices;
+              for(size_t i = 1; i < n; ++i){
+                const Expr* ei = c->getArg(i);
+                llvm::Value* vi = EmitAnyExpr(ei).getScalarVal();
+                vi = Builder.CreateBitCast(vi, Int32Ty);
+                indices.push_back(vi);
+              }
+
+              llvm::Value* idx = indices.back();
+
+              llvm::Value* last = nullptr;
+
+              for(size_t i = indices.size() - 1; i > 0; --i){
+                llvm::Value* dim =
+                  Builder.CreateConstGEP1_32(viewDimsPtr, i, "dim.ptr");
+
+                dim = Builder.CreateLoad(ideasAddr(dim), "dim");
+
+                if(last){
+                  last = Builder.CreateMul(last, dim);
+                }
+                else{
+                  last = dim;
+                }
+
+                idx = Builder.CreateAdd(idx,
+                  Builder.CreateMul(indices[i - 1], last), "idx");
+              }
+
+              llvm::Value* elementPtr = Builder.CreateGEP(viewPtr, idx, "elementPtr");
+
+              return RValue::get(elementPtr);
+            }
+          }
+        }
+      }
+    }
+  }
+  // ==============
+
+
   // Compute the object pointer.
   bool CanUseVirtualCall = MD->isVirtual() && !HasQualifier;
 

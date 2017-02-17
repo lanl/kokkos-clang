@@ -2373,6 +2373,14 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     // Fall through - it's already mapped to the intrinsic by GCCBuiltin.
     break;
   }
+
+  // +===== ideas ================
+  case Builtin::BIideas_test: {
+    llvm::errs() << "got it...\n";
+    return RValue::get(ConstantInt::get(Int32Ty, 1));
+  }
+  // +============================
+
   }
 
   // If this is an alias for a lib function (e.g. __builtin_sin), emit
