@@ -11,6 +11,51 @@
 //
 //===----------------------------------------------------------------------===//
 
+/*
+ * ###########################################################################
+ * Copyright (c) 2016, Los Alamos National Security, LLC All rights
+ * reserved. Copyright 2016. Los Alamos National Security, LLC. This
+ * software was produced under U.S. Government contract DE-AC52-06NA25396
+ * for Los Alamos National Laboratory (LANL), which is operated by Los
+ * Alamos National Security, LLC for the U.S. Department of Energy. The
+ * U.S. Government has rights to use, reproduce, and distribute this
+ * software.  NEITHER THE GOVERNMENT NOR LOS ALAMOS NATIONAL SECURITY,
+ * LLC MAKES ANY WARRANTY, EXPRESS OR IMPLIED, OR ASSUMES ANY LIABILITY
+ * FOR THE USE OF THIS SOFTWARE.  If software is modified to produce
+ * derivative works, such modified software should be clearly marked, so
+ * as not to confuse it with the version available from LANL.
+ *  
+ * Additionally, redistribution and use in source and binary forms, with
+ * or without modification, are permitted provided that the following
+ * conditions are met: 1.       Redistributions of source code must
+ * retain the above copyright notice, this list of conditions and the
+ * following disclaimer. 2.      Redistributions in binary form must
+ * reproduce the above copyright notice, this list of conditions and the
+ * following disclaimer in the documentation and/or other materials
+ * provided with the distribution. 3.      Neither the name of Los Alamos
+ * National Security, LLC, Los Alamos National Laboratory, LANL, the U.S.
+ * Government, nor the names of its contributors may be used to endorse
+ * or promote products derived from this software without specific prior
+ * written permission.
+  
+ * THIS SOFTWARE IS PROVIDED BY LOS ALAMOS NATIONAL SECURITY, LLC AND
+ * CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING,
+ * BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL LOS
+ * ALAMOS NATIONAL SECURITY, LLC OR CONTRIBUTORS BE LIABLE FOR ANY
+ * DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+ * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+ * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ * OTHERWISE) ARISING IN ANY WAY OUT OF THE US
+ * ########################################################################### 
+ * 
+ * Notes
+ *
+ * ##### 
+ */
+
 #include "CodeGenFunction.h"
 #include "CGDebugInfo.h"
 #include "CodeGenModule.h"
@@ -736,6 +781,7 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
 
     auto aitr2 = reduceFunc->arg_begin();
     for(auto& arg : reduceFunc->args()){
+      (void)arg; // suppress warning
       if(j >= m){
         break;
       }
@@ -916,6 +962,7 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
     B.SetInsertPoint(Cond12Block);
 
     Value* idx0 = B.CreateGEP(reduceShared, i0);
+    (void)idx0; //suppress warning
     val = B.CreateLoad(ideasAddr(sPtr));
     Value* idxOut = B.CreateGEP(reduceArray, blockIdx);
     B.CreateStore(val, ideasAddr(idxOut));
@@ -1343,7 +1390,7 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
   llvm::StructType* reductStruct;
 
   if(reduceVar){
-    llvm::Type* rt = ConvertType(reduceVar->getType().getNonReferenceType());
+    //llvm::Type* rt = ConvertType(reduceVar->getType().getNonReferenceType());
 
     TypeVec reduceParams;
     reduceParams.push_back(Int32Ty);
@@ -1473,7 +1520,7 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
   else{
     auto aitr = func->arg_begin();
     
-    Value* reduceArray;
+    //Value* reduceArray;
 
     for(const VarDecl* vd : pc.viewVars){ 
       aitr->setName(vd->getName());
@@ -1922,11 +1969,11 @@ llvm::Value* CodeGenFunction::GetOrCreateKokkosView(const VarDecl* vd){
   using namespace std;
 
   using ValueVec = vector<Value*>;
-  using TypeVec = vector<llvm::Type*>;
+  //using TypeVec = vector<llvm::Type*>;
 
   auto& B = Builder;
   auto& R = CGM.getIdeasRuntime();
-  LLVMContext& C = getLLVMContext();
+  //LLVMContext& C = getLLVMContext();
 
 
   CreateKokkosViewTypeInfo(vd);
@@ -1973,13 +2020,14 @@ llvm::Value* CodeGenFunction::GetOrCreateKokkosArray(const VarDecl* vd){
   using namespace std;
 
   using ValueVec = vector<Value*>;
-  using TypeVec = vector<llvm::Type*>;
+  //using TypeVec = vector<llvm::Type*>;
 
   auto& B = Builder;
   auto& R = CGM.getIdeasRuntime();
-  LLVMContext& C = getLLVMContext();
+  //LLVMContext& C = getLLVMContext();
 
   auto aitr = arrayInfoMap_.find(vd);
+  (void)aitr;
 
   CreateKokkosArrayTypeInfo(vd);
 
@@ -2016,11 +2064,11 @@ void CodeGenFunction::CopyKokkosDataToDevice(const Stmt* S){
     using namespace std;
 
     using ValueVec = vector<Value*>;
-    using TypeVec = vector<llvm::Type*>;
+    //using TypeVec = vector<llvm::Type*>;
 
     auto& B = Builder;
     auto& R = CGM.getIdeasRuntime();
-    LLVMContext& C = getLLVMContext();
+    //LLVMContext& C = getLLVMContext();
 
     const Stmt* stmt;
     if(auto e = dyn_cast<ExprWithCleanups>(S)){
@@ -2057,11 +2105,11 @@ void CodeGenFunction::CopyKokkosDataFromDevice(const Stmt* S){
     using namespace std;
 
     using ValueVec = vector<Value*>;
-    using TypeVec = vector<llvm::Type*>;
+    //using TypeVec = vector<llvm::Type*>;
 
     auto& B = Builder;
     auto& R = CGM.getIdeasRuntime();
-    LLVMContext& C = getLLVMContext();
+    //LLVMContext& C = getLLVMContext();
 
     const Stmt* stmt;
     if(auto e = dyn_cast<ExprWithCleanups>(S)){
@@ -2119,11 +2167,11 @@ void CodeGenFunction::KokkosSynchronize(const Stmt *S){
     using namespace std;
 
     using ValueVec = vector<Value*>;
-    using TypeVec = vector<llvm::Type*>;
+    //using TypeVec = vector<llvm::Type*>;
 
     auto& B = Builder;
     auto& R = CGM.getIdeasRuntime();
-    LLVMContext& C = getLLVMContext();
+    //LLVMContext& C = getLLVMContext();
 
     auto& sv = ParallelAnalysis::synchStmts();
 

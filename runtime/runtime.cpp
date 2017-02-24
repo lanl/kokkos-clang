@@ -903,7 +903,6 @@ namespace{
       }
 
       View* view = new View(data);
-      fprintf(stderr,"vp %p %p %d %d\n",viewPtr[0],viewPtr[1],viewPtr[2],viewPtr[3]);
 
       // offset based on Kokkos view layout -dpx
       viewPtr+=2;
@@ -914,7 +913,6 @@ namespace{
       for(size_t i = 0; i < runTimeDims; ++i){
         uint32_t si = *sizes;
         size *= si;
-        fprintf(stderr,"rts %d %d %d\n", i, si, size);
 
         view->pushDim(si);
 
@@ -924,11 +922,9 @@ namespace{
       for(size_t i = 0; i < staticDims; ++i){
         uint32_t si = staticSizes[i];
         size *= si;
-        fprintf(stderr,"ss %d %d %d\n", i, si, size);
 
         view->pushDim(si);
       }
-      fprintf(stderr,"size %d %d %d %d\n",elementSize, staticDims, runTimeDims, size);
 
 
       CUdeviceptr devPtr;
