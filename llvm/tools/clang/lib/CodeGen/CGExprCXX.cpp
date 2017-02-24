@@ -142,6 +142,7 @@ RValue CodeGenFunction::EmitCXXMemberOrOperatorMemberCallExpr(
       if(const RecordType* rt = dyn_cast<RecordType>(ct.getTypePtr())){
         (void)rt;
         if(ct.getAsString().find("class Kokkos::View") == 0){
+          //CE->dump();
           if(const CXXOperatorCallExpr* c = dyn_cast<CXXOperatorCallExpr>(CE)){
             if(c->getOperator() == OO_Call){
               llvm::Value* viewPtr = parallelForParamMap_[vd];
