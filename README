@@ -135,6 +135,8 @@ regression tests.
 ====== Building the Compiler
 
 -Clone Kokkos from https://github.com/kokkos/kokkos and place the 'kokkos' directory at the top-level directory of kokkos-clang
+git checkout tags/2.02.15
+
 
 -from the top-level ideas directory, e.g:
 
@@ -152,3 +154,10 @@ regression tests.
 can be used just like the ordinary clang++ compiler
 
 -Regression tests are located in test/regress
+
+====== Darwin cluster specific build
+
+module load cuda/8.0
+module load cmake
+module load gcc/5.2.0
+

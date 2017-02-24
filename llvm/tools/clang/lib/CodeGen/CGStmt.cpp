@@ -778,6 +778,7 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
 
     auto aitr2 = reduceFunc->arg_begin();
     for(auto& arg : reduceFunc->args()){
+      (void)arg; // suppress warning
       if(j >= m){
         break;
       }
@@ -958,6 +959,7 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
     B.SetInsertPoint(Cond12Block);
 
     Value* idx0 = B.CreateGEP(reduceShared, i0);
+    (void)idx0; //suppress warning
     val = B.CreateLoad(ideasAddr(sPtr));
     Value* idxOut = B.CreateGEP(reduceArray, blockIdx);
     B.CreateStore(val, ideasAddr(idxOut));
@@ -1385,7 +1387,7 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
   llvm::StructType* reductStruct;
 
   if(reduceVar){
-    llvm::Type* rt = ConvertType(reduceVar->getType().getNonReferenceType());
+    //llvm::Type* rt = ConvertType(reduceVar->getType().getNonReferenceType());
 
     TypeVec reduceParams;
     reduceParams.push_back(Int32Ty);
@@ -1515,7 +1517,7 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
   else{
     auto aitr = func->arg_begin();
     
-    Value* reduceArray;
+    //Value* reduceArray;
 
     for(const VarDecl* vd : pc.viewVars){ 
       aitr->setName(vd->getName());
@@ -1962,11 +1964,11 @@ llvm::Value* CodeGenFunction::GetOrCreateKokkosView(const VarDecl* vd){
   using namespace std;
 
   using ValueVec = vector<Value*>;
-  using TypeVec = vector<llvm::Type*>;
+  //using TypeVec = vector<llvm::Type*>;
 
   auto& B = Builder;
   auto& R = CGM.getIdeasRuntime();
-  LLVMContext& C = getLLVMContext();
+  //LLVMContext& C = getLLVMContext();
 
 
   CreateKokkosViewTypeInfo(vd);
@@ -2013,14 +2015,15 @@ llvm::Value* CodeGenFunction::GetOrCreateKokkosArray(const VarDecl* vd){
   using namespace std;
 
   using ValueVec = vector<Value*>;
-  using TypeVec = vector<llvm::Type*>;
+  //using TypeVec = vector<llvm::Type*>;
 
   auto& B = Builder;
   auto& R = CGM.getIdeasRuntime();
-  LLVMContext& C = getLLVMContext();
+  //LLVMContext& C = getLLVMContext();
 
   auto aitr = arrayInfoMap_.find(vd);
-  
+  (void)aitr; 
+ 
   CreateKokkosArrayTypeInfo(vd);
 
   ArrayInfo& info = arrayInfoMap_[vd];
@@ -2056,11 +2059,11 @@ void CodeGenFunction::CopyKokkosDataToDevice(const Stmt* S){
     using namespace std;
 
     using ValueVec = vector<Value*>;
-    using TypeVec = vector<llvm::Type*>;
+    //using TypeVec = vector<llvm::Type*>;
 
     auto& B = Builder;
     auto& R = CGM.getIdeasRuntime();
-    LLVMContext& C = getLLVMContext();
+    //LLVMContext& C = getLLVMContext();
 
     const Stmt* stmt;
     if(auto e = dyn_cast<ExprWithCleanups>(S)){
@@ -2097,11 +2100,11 @@ void CodeGenFunction::CopyKokkosDataFromDevice(const Stmt* S){
     using namespace std;
 
     using ValueVec = vector<Value*>;
-    using TypeVec = vector<llvm::Type*>;
+    //using TypeVec = vector<llvm::Type*>;
 
     auto& B = Builder;
     auto& R = CGM.getIdeasRuntime();
-    LLVMContext& C = getLLVMContext();
+    //LLVMContext& C = getLLVMContext();
 
     const Stmt* stmt;
     if(auto e = dyn_cast<ExprWithCleanups>(S)){
@@ -2159,11 +2162,11 @@ void CodeGenFunction::KokkosSynchronize(const Stmt *S){
     using namespace std;
 
     using ValueVec = vector<Value*>;
-    using TypeVec = vector<llvm::Type*>;
+    //using TypeVec = vector<llvm::Type*>;
 
     auto& B = Builder;
     auto& R = CGM.getIdeasRuntime();
-    LLVMContext& C = getLLVMContext();
+    //LLVMContext& C = getLLVMContext();
 
     auto& sv = ParallelAnalysis::synchStmts();
 
