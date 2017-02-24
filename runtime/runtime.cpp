@@ -43,6 +43,7 @@
  * ##### 
  */
 
+#include <stdio.h>
 #include <iostream>
 #include <cmath>
 #include <thread>
@@ -506,11 +507,13 @@ namespace{
       }
 
       void copyToDevice(){
+        //fprintf(stderr,"copy %p->%p %d\n",hostPtr_, devPtr_, size_);
         CUresult err = cuMemcpyHtoD(devPtr_, hostPtr_, size_);
         check(err);
       }
 
       void copyFromDevice(){
+        //fprintf(stderr,"copy %p<-%p %d\n",hostPtr_, devPtr_, size_);
         CUresult err = cuMemcpyDtoH(hostPtr_, devPtr_, size_);
         check(err); 
       }
@@ -888,8 +891,10 @@ namespace{
                  uint32_t staticDims,
                  uint32_t* staticSizes,
                  uint32_t runTimeDims){
-      
-      void* data = viewPtr[0];
+    
+      // offset based on Kokkos view layout which
+      // may change in future versions (has changed in the past...) -dpx  
+      void* data = viewPtr[1];
 
       auto itr = viewMap_.find(data);
       
@@ -898,8 +903,10 @@ namespace{
       }
 
       View* view = new View(data);
+      fprintf(stderr,"vp %p %p %d %d\n",viewPtr[0],viewPtr[1],viewPtr[2],viewPtr[3]);
 
-      ++viewPtr;
+      // offset based on Kokkos view layout -dpx
+      viewPtr+=2;
       uint32_t* sizes = (uint32_t*)viewPtr;
 
       size_t size = elementSize;
@@ -907,6 +914,7 @@ namespace{
       for(size_t i = 0; i < runTimeDims; ++i){
         uint32_t si = *sizes;
         size *= si;
+        fprintf(stderr,"rts %d %d %d\n", i, si, size);
 
         view->pushDim(si);
 
@@ -916,9 +924,12 @@ namespace{
       for(size_t i = 0; i < staticDims; ++i){
         uint32_t si = staticSizes[i];
         size *= si;
+        fprintf(stderr,"ss %d %d %d\n", i, si, size);
 
         view->pushDim(si);
       }
+      fprintf(stderr,"size %d %d %d %d\n",elementSize, staticDims, runTimeDims, size);
+
 
       CUdeviceptr devPtr;
       CUresult err = cuMemAlloc(&devPtr, size);
@@ -964,7 +975,8 @@ namespace{
     }
 
     void addKernelView(uint32_t kernelId, void** viewPtr, uint32_t flags){
-      void* data = viewPtr[0];
+       // offset based on Kokkos view layout -dpx
+      void* data = viewPtr[1];
 
       auto itr = kernelMap_.find(kernelId);
       assert(itr != kernelMap_.end());
@@ -1018,7 +1030,8 @@ namespace{
     }
 
     void copyViewToDevice(void** viewPtr){
-      void* data = viewPtr[0];
+       // offset based on Kokkos view layout -dpx
+      void* data = viewPtr[1];
 
       auto itr = viewMap_.find(data);
       assert(itr != viewMap_.end());
@@ -1028,7 +1041,8 @@ namespace{
     }
 
     void copyViewFromDevice(void** viewPtr){
-      void* data = viewPtr[0];
+       // offset based on Kokkos view layout -dpx
+      void* data = viewPtr[1];
 
       auto itr = viewMap_.find(data);
       assert(itr != viewMap_.end());
