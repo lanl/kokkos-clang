@@ -431,6 +431,7 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
   TypeVec params;
 
   for(const VarDecl* vd : pc.viewVars){
+    //vd->dump();
     CreateKokkosViewTypeInfo(vd);
 
     llvm::Type* t = ConvertType(viewInfoMap_[vd].elementType);
@@ -1132,11 +1133,18 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
   B.SetInsertPoint(initBlock);
 
   for(const VarDecl* vd : pc.viewVars){
+    //vd->dump();
     Value* viewPtr = GetOrCreateKokkosView(vd);
+
 
     uint32_t flags = 0;
 
     if(pc.readViewVars.find(vd) != pc.readViewVars.end()){
+       // Maybe there is a better place to do this, but we need to
+       // copy the view onto the device before the parallel for -dpx 
+       ValueVec args = {viewPtr};
+       B.CreateCall(R.CudaCopyViewToDeviceFunc(), args);
+
       flags |= FLAG_READ;
     }
 
@@ -1154,6 +1162,10 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
     uint32_t flags = 0;
 
     if(pc.readArrayVars.find(vd) != pc.readArrayVars.end()){
+       // Maybe there is a better place to do this, but we need to
+       // copy the array onto the device before the parallel for -dpx 
+       ValueVec args = {arrayPtr};
+       B.CreateCall(R.CudaCopyArrayToDeviceFunc(), args);
       flags |= FLAG_READ;
     }
 
@@ -1770,6 +1782,7 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
   B.SetInsertPoint(initBlock);
 
   for(const VarDecl* vd : pc.viewVars){
+    //vd->dump();
     Value* viewPtr = GetOrCreateKokkosView(vd);
 
     uint32_t flags = 0;
@@ -2060,6 +2073,7 @@ void CodeGenFunction::CopyKokkosDataToDevice(const Stmt* S){
     auto itr = ParallelAnalysis::toDeviceViews().find(stmt);
     if(itr != ParallelAnalysis::toDeviceViews().end()){
       for(const VarDecl* vd : itr->second){
+        //vd->dump();
         Value* ptr = GetOrCreateKokkosView(vd);
         ValueVec args = {ptr};
         B.CreateCall(R.CudaCopyViewToDeviceFunc(), args);
