@@ -18,9 +18,10 @@
 #define LLVM_TARGET_TARGETRECIP_H
 
 #include "llvm/ADT/StringRef.h"
-#include <vector>
-#include <string>
+#include <cstdint>
 #include <map>
+#include <string>
+#include <vector>
 
 namespace llvm {
 
@@ -31,7 +32,7 @@ public:
   /// Initialize all or part of the operations from command-line options or
   /// a front end.
   TargetRecip(const std::vector<std::string> &Args);
-  
+
   /// Set whether a particular reciprocal operation is enabled and how many
   /// refinement steps are needed when using it. Use "all" to set enablement
   /// and refinement steps for all operations.
@@ -52,14 +53,14 @@ private:
   enum {
     Uninitialized = -1
   };
-  
+
   struct RecipParams {
     int8_t Enabled;
     int8_t RefinementSteps;
-    
+
     RecipParams() : Enabled(Uninitialized), RefinementSteps(Uninitialized) {}
   };
-  
+
   std::map<StringRef, RecipParams> RecipMap;
   typedef std::map<StringRef, RecipParams>::iterator RecipIter;
   typedef std::map<StringRef, RecipParams>::const_iterator ConstRecipIter;
@@ -68,6 +69,6 @@ private:
   void parseIndividualParams(const std::vector<std::string> &Args);
 };
 
-} // End llvm namespace
+} // end namespace llvm
 
-#endif
+#endif // LLVM_TARGET_TARGETRECIP_H

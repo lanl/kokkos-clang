@@ -19,7 +19,6 @@
 #include "llvm/CodeGen/VirtRegMap.h"
 #include "LiveDebugVariables.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SparseSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/LiveIntervalAnalysis.h"
 #include "llvm/CodeGen/LiveStackAnalysis.h"
@@ -29,7 +28,6 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/IR/Function.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -84,7 +82,7 @@ unsigned VirtRegMap::createSpillSlot(const TargetRegisterClass *RC) {
 bool VirtRegMap::hasPreferredPhys(unsigned VirtReg) {
   unsigned Hint = MRI->getSimpleHint(VirtReg);
   if (!Hint)
-    return 0;
+    return false;
   if (TargetRegisterInfo::isVirtualRegister(Hint))
     Hint = getPhys(Hint);
   return getPhys(VirtReg) == Hint;
@@ -139,7 +137,7 @@ void VirtRegMap::print(raw_ostream &OS, const Module*) const {
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
-void VirtRegMap::dump() const {
+LLVM_DUMP_METHOD void VirtRegMap::dump() const {
   print(dbgs());
 }
 #endif
@@ -168,6 +166,7 @@ class VirtRegRewriter : public MachineFunctionPass {
   void addMBBLiveIns();
   bool readsUndefSubreg(const MachineOperand &MO) const;
   void addLiveInsForSubRanges(const LiveInterval &LI, unsigned PhysReg) const;
+  void handleIdentityCopy(MachineInstr &MI) const;
 
 public:
   static char ID;
@@ -176,6 +175,10 @@ public:
   void getAnalysisUsage(AnalysisUsage &AU) const override;
 
   bool runOnMachineFunction(MachineFunction&) override;
+  MachineFunctionProperties getSetProperties() const override {
+    return MachineFunctionProperties().set(
+        MachineFunctionProperties::Property::AllVRegsAllocated);
+  }
 };
 } // end anonymous namespace
 
@@ -329,7 +332,7 @@ bool VirtRegRewriter::readsUndefSubreg(const MachineOperand &MO) const {
   unsigned Reg = MO.getReg();
   const LiveInterval &LI = LIS->getInterval(Reg);
   const MachineInstr &MI = *MO.getParent();
-  SlotIndex BaseIndex = LIS->getInstructionIndex(&MI);
+  SlotIndex BaseIndex = LIS->getInstructionIndex(MI);
   // This code is only meant to handle reading undefined subregisters which
   // we couldn't properly detect before.
   assert(LI.liveAt(BaseIndex) &&
@@ -344,6 +347,30 @@ bool VirtRegRewriter::readsUndefSubreg(const MachineOperand &MO) const {
   return true;
 }
 
+void VirtRegRewriter::handleIdentityCopy(MachineInstr &MI) const {
+  if (!MI.isIdentityCopy())
+    return;
+  DEBUG(dbgs() << "Identity copy: " << MI);
+  ++NumIdCopies;
+
+  // Copies like:
+  //    %R0 = COPY %R0<undef>
+  //    %AL = COPY %AL, %EAX<imp-def>
+  // give us additional liveness information: The target (super-)register
+  // must not be valid before this point. Replace the COPY with a KILL
+  // instruction to maintain this information.
+  if (MI.getOperand(0).isUndef() || MI.getNumOperands() > 2) {
+    MI.setDesc(TII->get(TargetOpcode::KILL));
+    DEBUG(dbgs() << "  replace by: " << MI);
+    return;
+  }
+
+  if (Indexes)
+    Indexes->removeMachineInstrFromMaps(MI);
+  MI.eraseFromParent();
+  DEBUG(dbgs() << "  deleted.\n");
+}
+
 void VirtRegRewriter::rewrite() {
   bool NoSubRegLiveness = !MRI->subRegLivenessEnabled();
   SmallVector<unsigned, 8> SuperDeads;
@@ -355,7 +382,7 @@ void VirtRegRewriter::rewrite() {
     DEBUG(MBBI->print(dbgs(), Indexes));
     for (MachineBasicBlock::instr_iterator
            MII = MBBI->instr_begin(), MIE = MBBI->instr_end(); MII != MIE;) {
-      MachineInstr *MI = MII;
+      MachineInstr *MI = &*MII;
       ++MII;
 
       for (MachineInstr::mop_iterator MOI = MI->operands_begin(),
@@ -400,14 +427,6 @@ void VirtRegRewriter::rewrite() {
                 MO.setIsUndef(true);
             } else if (!MO.isDead()) {
               assert(MO.isDef());
-              // Things get tricky when we ran out of lane mask bits and
-              // merged multiple lanes into the overflow bit: In this case
-              // our subregister liveness tracking isn't precise and we can't
-              // know what subregister parts are undefined, fall back to the
-              // implicit super-register def then.
-              LaneBitmask LaneMask = TRI->getSubRegIndexLaneMask(SubReg);
-              if (TargetRegisterInfo::isImpreciseLaneMask(LaneMask))
-                SuperDefs.push_back(PhysReg);
             }
           }
 
@@ -441,16 +460,8 @@ void VirtRegRewriter::rewrite() {
 
       DEBUG(dbgs() << "> " << *MI);
 
-      // Finally, remove any identity copies.
-      if (MI->isIdentityCopy()) {
-        ++NumIdCopies;
-        DEBUG(dbgs() << "Deleting identity copy.\n");
-        if (Indexes)
-          Indexes->removeMachineInstrFromMaps(MI);
-        // It's safe to erase MI because MII has already been incremented.
-        MI->eraseFromParent();
-      }
+      // We can remove identity copies right now.
+      handleIdentityCopy(*MI);
     }
   }
 }
-

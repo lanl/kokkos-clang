@@ -43,6 +43,7 @@ def SwiftModel : SchedMachineModel {
   let MicroOpBufferSize = 45; // Based on NEON renamed registers.
   let LoadLatency = 3;
   let MispredictPenalty = 14; // A branch direction mispredict.
+  let CompleteModel = 0;      // FIXME: Remove if all instructions are covered.
 }
 
 // Swift predicates.
@@ -373,7 +374,7 @@ let SchedModel = SwiftModel in {
   }
   // Predicate.
   foreach NumAddr = 1-16 in {
-    def SwiftLMAddr#NumAddr#Pred : SchedPredicate<"TII->getNumLDMAddresses(MI) == "#NumAddr>;
+    def SwiftLMAddr#NumAddr#Pred : SchedPredicate<"TII->getNumLDMAddresses(*MI) == "#NumAddr>;
   }
   def SwiftWriteLDMAddrNoWB : SchedWriteRes<[SwiftUnitP01]> { let Latency = 0; }
   def SwiftWriteLDMAddrWB : SchedWriteRes<[SwiftUnitP01, SwiftUnitP01]>;

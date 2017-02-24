@@ -2579,9 +2579,7 @@ void BugReport::Profile(llvm::FoldingSetNodeID& hash) const {
     hash.AddPointer(GetCurrentOrPreviousStmt(ErrorNode));
   }
 
-  for (SmallVectorImpl<SourceRange>::const_iterator I =
-      Ranges.begin(), E = Ranges.end(); I != E; ++I) {
-    const SourceRange range = *I;
+  for (SourceRange range : Ranges) {
     if (!range.isValid())
       continue;
     hash.AddInteger(range.getBegin().getRawEncoding());
@@ -2714,8 +2712,7 @@ llvm::iterator_range<BugReport::ranges_iterator> BugReport::getRanges() {
   if (Ranges.size() == 1 && !Ranges.begin()->isValid())
     return llvm::make_range(ranges_iterator(), ranges_iterator());
 
-  return llvm::iterator_range<BugReport::ranges_iterator>(Ranges.begin(),
-                                                          Ranges.end());
+  return llvm::make_range(Ranges.begin(), Ranges.end());
 }
 
 PathDiagnosticLocation BugReport::getLocation(const SourceManager &SM) const {
@@ -2925,7 +2922,7 @@ bool TrimmedGraph::popNextReportGraph(ReportGraph &GraphWrapper) {
   while (true) {
     // Create the equivalent node in the new graph with the same state
     // and location.
-    ExplodedNode *NewN = GNew->getNode(OrigN->getLocation(), OrigN->getState(),
+    ExplodedNode *NewN = GNew->createUncachedNode(OrigN->getLocation(), OrigN->getState(),
                                        OrigN->isSink());
 
     // Store the mapping to the original node.
@@ -3292,11 +3289,11 @@ FindReportInEquivalenceClass(BugReportEquivClass& EQ,
   // post-dominated by a sink, simply add all the nodes in the equivalence class
   // to 'Nodes'.  Any of the reports will serve as a "representative" report.
   if (!BT.isSuppressOnSink()) {
-    BugReport *R = I;
+    BugReport *R = &*I;
     for (BugReportEquivClass::iterator I=EQ.begin(), E=EQ.end(); I!=E; ++I) {
       const ExplodedNode *N = I->getErrorNode();
       if (N) {
-        R = I;
+        R = &*I;
         bugReports.push_back(R);
       }
     }
@@ -3322,9 +3319,9 @@ FindReportInEquivalenceClass(BugReportEquivClass& EQ,
     }
     // No successors?  By definition this nodes isn't post-dominated by a sink.
     if (errorNode->succ_empty()) {
-      bugReports.push_back(I);
+      bugReports.push_back(&*I);
       if (!exampleReport)
-        exampleReport = I;
+        exampleReport = &*I;
       continue;
     }
 
@@ -3348,9 +3345,9 @@ FindReportInEquivalenceClass(BugReportEquivClass& EQ,
         if (Succ->succ_empty()) {
           // If we found an end-of-path node that is not a sink.
           if (!Succ->isSink()) {
-            bugReports.push_back(I);
+            bugReports.push_back(&*I);
             if (!exampleReport)
-              exampleReport = I;
+              exampleReport = &*I;
             WL.clear();
             break;
           }
@@ -3431,7 +3428,7 @@ void BugReporter::FlushReport(BugReport *exampleReport,
     PathDiagnosticLocation L = exampleReport->getLocation(getSourceManager());
     auto piece = llvm::make_unique<PathDiagnosticEventPiece>(
         L, exampleReport->getDescription());
-    for (const SourceRange &Range : exampleReport->getRanges())
+    for (SourceRange Range : exampleReport->getRanges())
       piece->addRange(Range);
     D->setEndOfPath(std::move(piece));
   }
@@ -3490,7 +3487,7 @@ LLVM_DUMP_METHOD void PathPieces::dump() const {
   }
 }
 
-void PathDiagnosticCallPiece::dump() const {
+LLVM_DUMP_METHOD void PathDiagnosticCallPiece::dump() const {
   llvm::errs() << "CALL\n--------------\n";
 
   if (const Stmt *SLoc = getLocStmt(getLocation()))
@@ -3501,26 +3498,26 @@ void PathDiagnosticCallPiece::dump() const {
     getLocation().dump();
 }
 
-void PathDiagnosticEventPiece::dump() const {
+LLVM_DUMP_METHOD void PathDiagnosticEventPiece::dump() const {
   llvm::errs() << "EVENT\n--------------\n";
   llvm::errs() << getString() << "\n";
   llvm::errs() << " ---- at ----\n";
   getLocation().dump();
 }
 
-void PathDiagnosticControlFlowPiece::dump() const {
+LLVM_DUMP_METHOD void PathDiagnosticControlFlowPiece::dump() const {
   llvm::errs() << "CONTROL\n--------------\n";
   getStartLocation().dump();
   llvm::errs() << " ---- to ----\n";
   getEndLocation().dump();
 }
 
-void PathDiagnosticMacroPiece::dump() const {
+LLVM_DUMP_METHOD void PathDiagnosticMacroPiece::dump() const {
   llvm::errs() << "MACRO\n--------------\n";
   // FIXME: Print which macro is being invoked.
 }
 
-void PathDiagnosticLocation::dump() const {
+LLVM_DUMP_METHOD void PathDiagnosticLocation::dump() const {
   if (!isValid()) {
     llvm::errs() << "<INVALID>\n";
     return;

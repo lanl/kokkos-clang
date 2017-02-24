@@ -1,7 +1,16 @@
 // REQUIRES: powerpc-registered-target
-// RUN: %clang_cc1 -faltivec -triple powerpc-unknown-unknown -emit-llvm %s -o - | FileCheck %s
-// RUN: %clang_cc1 -faltivec -triple powerpc64-unknown-unknown -emit-llvm %s -o - | FileCheck %s
-// RUN: %clang_cc1 -faltivec -triple powerpc64le-unknown-unknown -emit-llvm %s -o - | FileCheck %s -check-prefix=CHECK-LE
+// RUN: %clang_cc1 -faltivec -triple powerpc-unknown-unknown -emit-llvm %s \
+// RUN:            -o - | FileCheck %s
+// RUN: %clang_cc1 -faltivec -triple powerpc64-unknown-unknown -emit-llvm %s \
+// RUN:            -o - | FileCheck %s
+// RUN: %clang_cc1 -faltivec -triple powerpc64le-unknown-unknown -emit-llvm %s \
+// RUN:            -o - | FileCheck %s -check-prefix=CHECK-LE
+// RUN: not %clang_cc1 -triple powerpc64le-unknown-unknown -emit-llvm %s \
+// RUN:            -ferror-limit 0 -DNO_ALTIVEC -o - 2>&1 \
+// RUN:            | FileCheck %s -check-prefix=CHECK-NOALTIVEC
+#ifndef NO_ALTIVEC
+#include <altivec.h>
+#endif
 
 vector bool char vbc = { 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0 };
 vector signed char vsc = { 1, -2, 3, -4, 5, -6, 7, -8, 9, -10, 11, -12, 13, -14, 15, -16 };
@@ -26,6 +35,8 @@ vector bool int res_vbi;
 vector int res_vi;
 vector unsigned int res_vui;
 vector float res_vf;
+
+// CHECK-NOALTIVEC: error: unknown type name 'vector'
 
 signed char param_sc;
 unsigned char param_uc;
@@ -66,8 +77,16 @@ void test1() {
 // CHECK-LE: @llvm.ppc.altivec.vmaxsw
 
   vf = vec_abs(vf);
-// CHECK: and <4 x i32>
-// CHECK-LE: and <4 x i32>
+// CHECK: bitcast <4 x float> %{{.*}} to <4 x i32>
+// CHECK: and <4 x i32> {{.*}}, <i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647>
+// CHECK: bitcast <4 x i32> %{{.*}} to <4 x float>
+// CHECK: store <4 x float> %{{.*}}, <4 x float>* @vf
+// CHECK-LE: bitcast <4 x float> %{{.*}} to <4 x i32>
+// CHECK-LE: and <4 x i32> {{.*}}, <i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647>
+// CHECK-LE: bitcast <4 x i32> %{{.*}} to <4 x float>
+// CHECK-LE: store <4 x float> %{{.*}}, <4 x float>* @vf
+// CHECK-NOALTIVEC: error: use of undeclared identifier 'vf'
+// CHECK-NOALTIVEC: vf = vec_abs(vf) 
 
   /* vec_abs */
   vsc = vec_abss(vsc);
@@ -940,6 +959,30 @@ void test2() {
 // CHECK-LE: @llvm.ppc.altivec.vcmpeqfp
 
   /* vec_cmpge */
+  res_vbc = vec_cmpge(vsc, vsc);
+// CHECK: @llvm.ppc.altivec.vcmpgtsb
+// CHECK-LE: @llvm.ppc.altivec.vcmpgtsb
+
+  res_vbc = vec_cmpge(vuc, vuc);
+// CHECK: @llvm.ppc.altivec.vcmpgtub
+// CHECK-LE: @llvm.ppc.altivec.vcmpgtub
+
+  res_vbs = vec_cmpge(vs, vs);
+// CHECK: @llvm.ppc.altivec.vcmpgtsh
+// CHECK-LE: @llvm.ppc.altivec.vcmpgtsh
+
+  res_vbs = vec_cmpge(vus, vus);
+// CHECK: @llvm.ppc.altivec.vcmpgtuh
+// CHECK-LE: @llvm.ppc.altivec.vcmpgtuh
+
+  res_vbi = vec_cmpge(vi, vi);
+// CHECK: @llvm.ppc.altivec.vcmpgtsw
+// CHECK-LE: @llvm.ppc.altivec.vcmpgtsw
+
+  res_vbi = vec_cmpge(vui, vui);
+// CHECK: @llvm.ppc.altivec.vcmpgtuw
+// CHECK-LE: @llvm.ppc.altivec.vcmpgtuw
+
   res_vbi = vec_cmpge(vf, vf);
 // CHECK: @llvm.ppc.altivec.vcmpgefp
 // CHECK-LE: @llvm.ppc.altivec.vcmpgefp
@@ -1010,6 +1053,30 @@ void test5() {
 // CHECK-LE: @llvm.ppc.altivec.vcmpgtfp
 
   /* vec_cmple */
+  res_vbc = vec_cmple(vsc, vsc);
+// CHECK: @llvm.ppc.altivec.vcmpgtsb
+// CHECK-LE: @llvm.ppc.altivec.vcmpgtsb
+
+  res_vbc = vec_cmple(vuc, vuc);
+// CHECK: @llvm.ppc.altivec.vcmpgtub
+// CHECK-LE: @llvm.ppc.altivec.vcmpgtub
+
+  res_vbs = vec_cmple(vs, vs);
+// CHECK: @llvm.ppc.altivec.vcmpgtsh
+// CHECK-LE: @llvm.ppc.altivec.vcmpgtsh
+
+  res_vbs = vec_cmple(vus, vus);
+// CHECK: @llvm.ppc.altivec.vcmpgtuh
+// CHECK-LE: @llvm.ppc.altivec.vcmpgtuh
+
+  res_vbi = vec_cmple(vi, vi);
+// CHECK: @llvm.ppc.altivec.vcmpgtsw
+// CHECK-LE: @llvm.ppc.altivec.vcmpgtsw
+
+  res_vbi = vec_cmple(vui, vui);
+// CHECK: @llvm.ppc.altivec.vcmpgtuw
+// CHECK-LE: @llvm.ppc.altivec.vcmpgtuw
+
   res_vbi = vec_cmple(vf, vf);
 // CHECK: @llvm.ppc.altivec.vcmpgefp
 // CHECK-LE: @llvm.ppc.altivec.vcmpgefp
@@ -5666,6 +5733,10 @@ void test6() {
 // CHECK: extractelement <16 x i8>
 // CHECK-LE: extractelement <16 x i8>
 
+  res_uc = vec_extract(vbc, param_i);
+// CHECK: extractelement <16 x i8>
+// CHECK-LE: extractelement <16 x i8>
+
   res_s  = vec_extract(vs, param_i);
 // CHECK: extractelement <8 x i16>
 // CHECK-LE: extractelement <8 x i16>
@@ -5674,11 +5745,19 @@ void test6() {
 // CHECK: extractelement <8 x i16>
 // CHECK-LE: extractelement <8 x i16>
 
+  res_us = vec_extract(vbs, param_i);
+// CHECK: extractelement <8 x i16>
+// CHECK-LE: extractelement <8 x i16>
+
   res_i  = vec_extract(vi, param_i);
 // CHECK: extractelement <4 x i32>
 // CHECK-LE: extractelement <4 x i32>
 
   res_ui = vec_extract(vui, param_i);
+// CHECK: extractelement <4 x i32>
+// CHECK-LE: extractelement <4 x i32>
+
+  res_ui = vec_extract(vbi, param_i);
 // CHECK: extractelement <4 x i32>
 // CHECK-LE: extractelement <4 x i32>
 
@@ -5695,6 +5774,10 @@ void test6() {
 // CHECK: insertelement <16 x i8>
 // CHECK-LE: insertelement <16 x i8>
 
+  res_vbc = vec_insert(param_uc, vbc, param_i);
+// CHECK: insertelement <16 x i8>
+// CHECK-LE: insertelement <16 x i8>
+
   res_vs  = vec_insert(param_s, vs, param_i);
 // CHECK: insertelement <8 x i16>
 // CHECK-LE: insertelement <8 x i16>
@@ -5703,11 +5786,19 @@ void test6() {
 // CHECK: insertelement <8 x i16>
 // CHECK-LE: insertelement <8 x i16>
 
+  res_vbs = vec_insert(param_us, vbs, param_i);
+// CHECK: insertelement <8 x i16>
+// CHECK-LE: insertelement <8 x i16>
+
   res_vi  = vec_insert(param_i, vi, param_i);
 // CHECK: insertelement <4 x i32>
 // CHECK-LE: insertelement <4 x i32>
 
   res_vui = vec_insert(param_ui, vui, param_i);
+// CHECK: insertelement <4 x i32>
+// CHECK-LE: insertelement <4 x i32>
+
+  res_vbi = vec_insert(param_ui, vbi, param_i);
 // CHECK: insertelement <4 x i32>
 // CHECK-LE: insertelement <4 x i32>
 

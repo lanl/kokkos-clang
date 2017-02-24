@@ -11,16 +11,13 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/CodeGen/PseudoSourceValue.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/ManagedStatic.h"
-#include "llvm/Support/Mutex.h"
 #include "llvm/Support/raw_ostream.h"
-#include <map>
 using namespace llvm;
 
 static const char *const PSVNames[] = {
@@ -50,9 +47,7 @@ bool PseudoSourceValue::isAliased(const MachineFrameInfo *) const {
 }
 
 bool PseudoSourceValue::mayAlias(const MachineFrameInfo *) const {
-  if (isGOT() || isConstantPool() || isJumpTable())
-    return false;
-  return true;
+  return !(isGOT() || isConstantPool() || isJumpTable());
 }
 
 bool FixedStackPseudoSourceValue::isConstant(

@@ -2,6 +2,9 @@
 
 typedef __typeof(sizeof(0)) size_t;
 
+// Declare the reserved global placement new.
+void *operator new(size_t, void*);
+
 // This just shouldn't crash.
 namespace test0 {
   struct allocator {
@@ -27,7 +30,7 @@ namespace test1 {
 
   A *a() {
     // CHECK:    define [[A:%.*]]* @_ZN5test11aEv()
-    // CHECK:      [[NEW:%.*]] = call noalias i8* @_Znwm(i64 8)
+    // CHECK:      [[NEW:%.*]] = call i8* @_Znwm(i64 8)
     // CHECK-NEXT: [[CAST:%.*]] = bitcast i8* [[NEW]] to [[A]]*
     // CHECK-NEXT: invoke void @_ZN5test11AC1Ei([[A]]* [[CAST]], i32 5)
     // CHECK:      ret [[A]]* [[CAST]]
@@ -37,7 +40,7 @@ namespace test1 {
 
   A *b() {
     // CHECK:    define [[A:%.*]]* @_ZN5test11bEv()
-    // CHECK:      [[NEW:%.*]] = call noalias i8* @_Znwm(i64 8)
+    // CHECK:      [[NEW:%.*]] = call i8* @_Znwm(i64 8)
     // CHECK-NEXT: [[CAST:%.*]] = bitcast i8* [[NEW]] to [[A]]*
     // CHECK-NEXT: [[FOO:%.*]] = invoke i32 @_ZN5test13fooEv()
     // CHECK:      invoke void @_ZN5test11AC1Ei([[A]]* [[CAST]], i32 [[FOO]])
@@ -53,7 +56,7 @@ namespace test1 {
   A *c() {
     // CHECK:    define [[A:%.*]]* @_ZN5test11cEv()
     // CHECK:      [[ACTIVE:%.*]] = alloca i1
-    // CHECK-NEXT: [[NEW:%.*]] = call noalias i8* @_Znwm(i64 8)
+    // CHECK-NEXT: [[NEW:%.*]] = call i8* @_Znwm(i64 8)
     // CHECK-NEXT: store i1 true, i1* [[ACTIVE]] 
     // CHECK-NEXT: [[CAST:%.*]] = bitcast i8* [[NEW]] to [[A]]*
     // CHECK-NEXT: invoke void @_ZN5test11BC1Ev([[B:%.*]]* [[T0:%.*]])
@@ -79,7 +82,7 @@ namespace test1 {
   A *d() {
     // CHECK:    define [[A:%.*]]* @_ZN5test11dEv()
     // CHECK:      [[ACTIVE:%.*]] = alloca i1
-    // CHECK-NEXT: [[NEW:%.*]] = call noalias i8* @_Znwm(i64 8)
+    // CHECK-NEXT: [[NEW:%.*]] = call i8* @_Znwm(i64 8)
     // CHECK-NEXT: store i1 true, i1* [[ACTIVE]] 
     // CHECK-NEXT: [[CAST:%.*]] = bitcast i8* [[NEW]] to [[A]]*
     // CHECK-NEXT: invoke void @_ZN5test11BC1Ev([[B:%.*]]* [[T0:%.*]])
@@ -97,7 +100,7 @@ namespace test1 {
   A *e() {
     // CHECK:    define [[A:%.*]]* @_ZN5test11eEv()
     // CHECK:      [[ACTIVE:%.*]] = alloca i1
-    // CHECK-NEXT: [[NEW:%.*]] = call noalias i8* @_Znwm(i64 8)
+    // CHECK-NEXT: [[NEW:%.*]] = call i8* @_Znwm(i64 8)
     // CHECK-NEXT: store i1 true, i1* [[ACTIVE]] 
     // CHECK-NEXT: [[CAST:%.*]] = bitcast i8* [[NEW]] to [[A]]*
     // CHECK-NEXT: invoke void @_ZN5test11BC1Ev([[B:%.*]]* [[T0:%.*]])
@@ -128,7 +131,7 @@ namespace test1 {
     // CHECK:    define [[A:%.*]]* @_ZN5test11iEv()
     // CHECK:      [[X:%.*]] = alloca [[A]]*, align 8
     // CHECK:      [[ACTIVE:%.*]] = alloca i1
-    // CHECK:      [[NEW:%.*]] = call noalias i8* @_Znwm(i64 8)
+    // CHECK:      [[NEW:%.*]] = call i8* @_Znwm(i64 8)
     // CHECK-NEXT: store i1 true, i1* [[ACTIVE]] 
     // CHECK-NEXT: [[CAST:%.*]] = bitcast i8* [[NEW]] to [[A]]*
     // CHECK-NEXT: invoke void @_ZN5test15makeBEv([[B:%.*]]* sret [[T0:%.*]])
@@ -419,7 +422,7 @@ namespace test9 {
     return new A[10];
   }
   // CHECK: define {{%.*}}* @_ZN5test94testEv
-  // CHECK: [[TEST9_NEW:%.*]] = call noalias i8* @_Znam
+  // CHECK: [[TEST9_NEW:%.*]] = call i8* @_Znam
   // CHECK: call void @_ZdaPv(i8* [[TEST9_NEW]])
 }
 
@@ -524,6 +527,23 @@ namespace test11 {
   // CHECK:      br label
   // CHECK:      resume
   //   (After this is a terminate landingpad.)
+}
+
+namespace test12 {
+  struct A {
+    void operator delete(void *, void *);
+    A();
+  };
+
+  A *test(void *ptr) {
+    return new (ptr) A();
+  }
+  // CHECK-LABEL: define {{.*}} @_ZN6test124testEPv(
+  // CHECK:       [[PTR:%.*]] = load i8*, i8*
+  // CHECK-NEXT:  [[CAST:%.*]] = bitcast i8* [[PTR]] to [[A:%.*]]*
+  // CHECK-NEXT:  invoke void @_ZN6test121AC1Ev([[A]]* [[CAST]])
+  // CHECK:       ret [[A]]* [[CAST]]
+  // CHECK:       invoke void @_ZN6test121AdlEPvS1_(i8* [[PTR]], i8* [[PTR]])
 }
 
 // CHECK: attributes [[NI_NR_NUW]] = { noinline noreturn nounwind }

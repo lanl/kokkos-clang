@@ -96,7 +96,7 @@ define void @scalar_or_i64(i64 addrspace(1)* %out, i64 %a, i64 %b) {
 ; SI: v_or_b32_e32 v{{[0-9]}}
 define void @vector_or_i64(i64 addrspace(1)* %out, i64 addrspace(1)* %a, i64 addrspace(1)* %b) {
   %loada = load i64, i64 addrspace(1)* %a, align 8
-  %loadb = load i64, i64 addrspace(1)* %a, align 8
+  %loadb = load i64, i64 addrspace(1)* %b, align 8
   %or = or i64 %loada, %loadb
   store i64 %or, i64 addrspace(1)* %out
   ret void
@@ -153,7 +153,7 @@ define void @trunc_i64_or_to_i32(i32 addrspace(1)* %out, i64 %a, i64 %b) {
 }
 
 ; FUNC-LABEL: {{^}}or_i1:
-; EG: OR_INT {{\** *}}T{{[0-9]+\.[XYZW], PV\.[XYZW], PS}}
+; EG: OR_INT * {{\** *}}T{{[0-9]+\.[XYZW], PS, PV\.[XYZW]}}
 
 ; SI: s_or_b64 s[{{[0-9]+:[0-9]+}}], vcc, s[{{[0-9]+:[0-9]+}}]
 define void @or_i1(i32 addrspace(1)* %out, float addrspace(1)* %in0, float addrspace(1)* %in1) {

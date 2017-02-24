@@ -11,51 +11,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-/*
- * ###########################################################################
- * Copyright (c) 2016, Los Alamos National Security, LLC All rights
- * reserved. Copyright 2016. Los Alamos National Security, LLC. This
- * software was produced under U.S. Government contract DE-AC52-06NA25396
- * for Los Alamos National Laboratory (LANL), which is operated by Los
- * Alamos National Security, LLC for the U.S. Department of Energy. The
- * U.S. Government has rights to use, reproduce, and distribute this
- * software.  NEITHER THE GOVERNMENT NOR LOS ALAMOS NATIONAL SECURITY,
- * LLC MAKES ANY WARRANTY, EXPRESS OR IMPLIED, OR ASSUMES ANY LIABILITY
- * FOR THE USE OF THIS SOFTWARE.  If software is modified to produce
- * derivative works, such modified software should be clearly marked, so
- * as not to confuse it with the version available from LANL.
- *  
- * Additionally, redistribution and use in source and binary forms, with
- * or without modification, are permitted provided that the following
- * conditions are met: 1.       Redistributions of source code must
- * retain the above copyright notice, this list of conditions and the
- * following disclaimer. 2.      Redistributions in binary form must
- * reproduce the above copyright notice, this list of conditions and the
- * following disclaimer in the documentation and/or other materials
- * provided with the distribution. 3.      Neither the name of Los Alamos
- * National Security, LLC, Los Alamos National Laboratory, LANL, the U.S.
- * Government, nor the names of its contributors may be used to endorse
- * or promote products derived from this software without specific prior
- * written permission.
-  
- * THIS SOFTWARE IS PROVIDED BY LOS ALAMOS NATIONAL SECURITY, LLC AND
- * CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING,
- * BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
- * FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL LOS
- * ALAMOS NATIONAL SECURITY, LLC OR CONTRIBUTORS BE LIABLE FOR ANY
- * DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
- * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
- * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE US
- * ########################################################################### 
- * 
- * Notes
- *
- * ##### 
- */
-
 #include "CodeGenFunction.h"
 #include "CGDebugInfo.h"
 #include "CodeGenModule.h"
@@ -89,7 +44,9 @@
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Vectorize.h"
+#include "llvm/Transforms/Scalar/GVN.h"
 #include "clang/Analysis/ParallelAnalysis.h"
+#include "llvm/CodeGen/CommandFlags.h"
 
 #include <unordered_set>
 #include <fstream>
@@ -201,7 +158,8 @@ void CodeGenFunction::EmitParallelFor(const CallExpr* E,
     
     auto aitr = func->arg_begin();
     aitr->setName("args");
-    Value* argsVoidPtr = aitr++;
+    aitr++;
+    Value* argsVoidPtr = &*aitr;
 
     parallelForStack_.back()->arg = argsVoidPtr;
     
@@ -495,7 +453,7 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
 
   for(const VarDecl* vd : pc.viewVars){ 
     aitr->setName(vd->getName());
-    parallelForParamMap_[vd] = aitr;
+    parallelForParamMap_[vd] = &*aitr;
     ++aitr;
 
     string pn = vd->getName();
@@ -503,18 +461,18 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
       
     aitr->setName(pn);
 
-    parallelForParamDimMap_[vd] = aitr;
+    parallelForParamDimMap_[vd] = &*aitr;
     ++aitr;
   }
 
-  auto aitrArray = aitr;
+  auto aitrArray = &*aitr;
 
   for(const VarDecl* vd : pc.arrayVars){ 
     aitr->setName(vd->getName());
     ++aitr;
   }
 
-  auto aitrCapture = aitr;
+  auto aitrCapture = &*aitr;
 
   for(const VarDecl* vd : captureVars){
     aitr->setName(vd->getName());
@@ -526,7 +484,7 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
     aitr->setName("index");
   }
   else{
-    count = aitr;
+    count = &*aitr;
     aitr->setName("n");
     ++aitr;
   }
@@ -538,7 +496,7 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
   Value* reduceShared;
 
   if(reduceVar){
-    reduceIndex = aitr;
+    reduceIndex = &*aitr;
 
     reduceFunc =
       llvm::Function::Create(ftReduce,
@@ -548,16 +506,16 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
 
     auto aitr2 = reduceFunc->arg_begin();
     auto aitr3 = func->arg_begin();
-    while(aitr3 != reduceIndex){
+    while(&*aitr3 != reduceIndex){
       aitr2->setName(aitr3->getName());
       ++aitr3;
       ++aitr2;
     }
 
-    reduceN = aitr2;
+    reduceN = &*aitr2;
     aitr2->setName("n");
     ++aitr2;
-    reduceArray = aitr2;
+    reduceArray = &*aitr2;
     aitr2->setName("reduce.out");
   }
   else{
@@ -781,7 +739,7 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
         break;
       }
       
-      args.push_back(aitr2);
+      args.push_back(&*aitr2);
       ++aitr2;
       ++j;
     }
@@ -1020,7 +978,7 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
                                   "sm_35",
                                   "",
                                   llvm::TargetOptions(),
-                                  Reloc::Default,
+                                  getRelocModel(),
                                   CodeModel::Default,
                                   CodeGenOpt::Aggressive);
 
@@ -1418,7 +1376,7 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
   if(reduceVar){
     auto aitr = func->arg_begin();
     aitr->setName("index");
-    Value* index = aitr;
+    Value* index = &*aitr;
 
     ++aitr;
     aitr->setName("args");
@@ -1426,12 +1384,12 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
     ++aitr;
     aitr->setName("value");
 
-    Value* reduceResultVoidPtr = aitr;
+    Value* reduceResultVoidPtr = &*aitr;
 
     Value* args;
 
     if(reductStruct){
-      args = B.CreateBitCast(aitr, llvm::PointerType::get(reductStruct, 0));
+      args = B.CreateBitCast(reduceResultVoidPtr, llvm::PointerType::get(reductStruct, 0));
     }
     else{
       args = nullptr;
@@ -1507,7 +1465,7 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
 
     for(const VarDecl* vd : pc.viewVars){ 
       aitr->setName(vd->getName());
-      parallelForParamMap_[vd] = aitr;
+      parallelForParamMap_[vd] = &*aitr;
       ++aitr;
 
       string pn = vd->getName();
@@ -1515,18 +1473,18 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
         
       aitr->setName(pn);
 
-      parallelForParamDimMap_[vd] = aitr;
+      parallelForParamDimMap_[vd] = &*aitr;
       ++aitr;
     }
 
-    auto aitrArray = aitr;
+    auto aitrArray = &*aitr;
 
     for(const VarDecl* vd : pc.arrayVars){ 
       aitr->setName(vd->getName());
       ++aitr;
     }
 
-    auto aitrCapture = aitr;
+    auto aitrCapture = &*aitr;
 
     for(const VarDecl* vd : captureVars){
       aitr->setName(vd->getName());
@@ -1538,7 +1496,7 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
       aitr->setName("index");
     }
     else{
-      count = aitr;
+      count = &*aitr;
       aitr->setName("n");
       ++aitr;
     }
@@ -1647,7 +1605,7 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
                                   "sm_35",
                                   "",
                                   llvm::TargetOptions(),
-                                  Reloc::Default,
+                                  getRelocModel(),
                                   CodeModel::Default,
                                   CodeGenOpt::Aggressive);
 
@@ -1848,6 +1806,8 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
 
 // ===========================================
 
+
+
 //===----------------------------------------------------------------------===//
 //                              Statement Emission
 //===----------------------------------------------------------------------===//
@@ -1871,11 +1831,11 @@ void CodeGenFunction::CreateKokkosViewTypeInfo(const VarDecl* vd){
 
   ViewInfo info;
 
-  const RecordType* rt = 
+  const RecordType* rt =
     dyn_cast<RecordType>(vd->getType().getCanonicalType().getTypePtr());
   assert(rt && "expected a RecordType");
 
-  const ClassTemplateSpecializationDecl* td = 
+  const ClassTemplateSpecializationDecl* td =
     dyn_cast<ClassTemplateSpecializationDecl>(rt->getDecl());
   assert(td && "expected a ClassTemplateSpecializationDecl");
 
@@ -1895,7 +1855,7 @@ void CodeGenFunction::CreateKokkosViewTypeInfo(const VarDecl* vd){
       break;
     }
     else{
-      assert(false && "expected a ConstantArrayType or PointerType");        
+      assert(false && "expected a ConstantArrayType or PointerType");
     }
   }
 
@@ -1917,10 +1877,10 @@ void CodeGenFunction::CreateKokkosViewTypeInfo(const VarDecl* vd){
     ++info.runtimeDims;
   }
 
-  viewInfoMap_[vd] = info;   
+  viewInfoMap_[vd] = info;
 }
 
-void CodeGenFunction::CreateKokkosArrayTypeInfo(const VarDecl* vd){  
+void CodeGenFunction::CreateKokkosArrayTypeInfo(const VarDecl* vd){
   if(arrayInfoMap_.find(vd) != arrayInfoMap_.end()){
     return;
   }
@@ -1941,7 +1901,7 @@ void CodeGenFunction::CreateKokkosArrayTypeInfo(const VarDecl* vd){
   info.size = EmitAnyExprToTemp(ne->getArraySize()).getScalarVal();
   info.size = B.CreateTrunc(info.size, Int32Ty);
 
-  arrayInfoMap_[vd] = info;  
+  arrayInfoMap_[vd] = info;
 }
 
 llvm::Value* CodeGenFunction::GetOrCreateKokkosView(const VarDecl* vd){
@@ -1962,7 +1922,7 @@ llvm::Value* CodeGenFunction::GetOrCreateKokkosView(const VarDecl* vd){
 
   Address addr = GetAddrOfLocalVar(vd);
   assert(addr.isValid());
-  
+
   Value* viewPtr = B.CreateBitCast(addr.getPointer(), VoidPtrTy);
 
   if(info.created){
@@ -1984,8 +1944,8 @@ llvm::Value* CodeGenFunction::GetOrCreateKokkosView(const VarDecl* vd){
     ++i;
   }
 
-  ValueVec args = 
-    {viewPtr, ConstantInt::get(Int32Ty, elementSize), 
+  ValueVec args =
+    {viewPtr, ConstantInt::get(Int32Ty, elementSize),
      staticDims,
      staticSizes,
      ConstantInt::get(Int32Ty, info.runtimeDims)};
@@ -2007,7 +1967,7 @@ llvm::Value* CodeGenFunction::GetOrCreateKokkosArray(const VarDecl* vd){
   LLVMContext& C = getLLVMContext();
 
   auto aitr = arrayInfoMap_.find(vd);
-  
+
   CreateKokkosArrayTypeInfo(vd);
 
   ArrayInfo& info = arrayInfoMap_[vd];
@@ -2018,7 +1978,7 @@ llvm::Value* CodeGenFunction::GetOrCreateKokkosArray(const VarDecl* vd){
   Value* ptr = B.CreateLoad(addr);
 
   Value* arrayPtr = B.CreateBitCast(ptr, VoidPtrTy);
-  
+
   if(info.created){
     return arrayPtr;
   }
@@ -2028,7 +1988,7 @@ llvm::Value* CodeGenFunction::GetOrCreateKokkosArray(const VarDecl* vd){
 
   info.created = true;
 
-  ValueVec args = 
+  ValueVec args =
     {arrayPtr, ConstantInt::get(Int32Ty, elementSize), info.size};
 
   B.CreateCall(R.CudaAddArrayFunc(), args);
@@ -2157,7 +2117,7 @@ void CodeGenFunction::KokkosSynchronize(const Stmt *S){
     while(itr != sv.end()){
       auto pc = itr->second;
       const Stmt* stmt = itr->first;
-     
+
       if(KokkosContains(S, stmt)){
         ValueVec args = {ConstantInt::get(Int32Ty, pc->id)};
         B.CreateCall(R.CudaAwaitKernelFunc(), args);
@@ -2166,9 +2126,9 @@ void CodeGenFunction::KokkosSynchronize(const Stmt *S){
       }
       else{
         ++itr;
-      }  
+      }
     }
-  }  
+  }
 }
 
 // ===================================
@@ -2181,9 +2141,10 @@ void CodeGenFunction::EmitStmt(const Stmt *S) {
   KokkosSynchronize(S);
   CopyKokkosDataFromDevice(S);
 
+
   // These statements have their own debug info handling.
-  if (EmitSimpleStmt(S)){
-    // +===== ideas
+  if (EmitSimpleStmt(S)) {
+     // +===== ideas
     CopyKokkosDataToDevice(S);
     return;
   }
@@ -2276,6 +2237,10 @@ void CodeGenFunction::EmitStmt(const Stmt *S) {
   case Stmt::SwitchStmtClass:   EmitSwitchStmt(cast<SwitchStmt>(*S));     break;
   case Stmt::GCCAsmStmtClass:   // Intentional fall-through.
   case Stmt::MSAsmStmtClass:    EmitAsmStmt(cast<AsmStmt>(*S));           break;
+  case Stmt::CoroutineBodyStmtClass:
+  case Stmt::CoreturnStmtClass:
+    CGM.ErrorUnsupported(S, "coroutine");
+    break;
   case Stmt::CapturedStmtClass: {
     const CapturedStmt *CS = cast<CapturedStmt>(S);
     EmitCapturedStmt(*CS, CS->getCapturedRegionKind());
@@ -2387,8 +2352,46 @@ void CodeGenFunction::EmitStmt(const Stmt *S) {
   case Stmt::OMPTargetDataDirectiveClass:
     EmitOMPTargetDataDirective(cast<OMPTargetDataDirective>(*S));
     break;
+  case Stmt::OMPTargetEnterDataDirectiveClass:
+    EmitOMPTargetEnterDataDirective(cast<OMPTargetEnterDataDirective>(*S));
+    break;
+  case Stmt::OMPTargetExitDataDirectiveClass:
+    EmitOMPTargetExitDataDirective(cast<OMPTargetExitDataDirective>(*S));
+    break;
+  case Stmt::OMPTargetParallelDirectiveClass:
+    EmitOMPTargetParallelDirective(cast<OMPTargetParallelDirective>(*S));
+    break;
+  case Stmt::OMPTargetParallelForDirectiveClass:
+    EmitOMPTargetParallelForDirective(cast<OMPTargetParallelForDirective>(*S));
+    break;
+  case Stmt::OMPTaskLoopDirectiveClass:
+    EmitOMPTaskLoopDirective(cast<OMPTaskLoopDirective>(*S));
+    break;
+  case Stmt::OMPTaskLoopSimdDirectiveClass:
+    EmitOMPTaskLoopSimdDirective(cast<OMPTaskLoopSimdDirective>(*S));
+    break;
+  case Stmt::OMPDistributeDirectiveClass:
+    EmitOMPDistributeDirective(cast<OMPDistributeDirective>(*S));
+    break;
+  case Stmt::OMPTargetUpdateDirectiveClass:
+    EmitOMPTargetUpdateDirective(cast<OMPTargetUpdateDirective>(*S));
+    break;
+  case Stmt::OMPDistributeParallelForDirectiveClass:
+    EmitOMPDistributeParallelForDirective(
+        cast<OMPDistributeParallelForDirective>(*S));
+    break;
+  case Stmt::OMPDistributeParallelForSimdDirectiveClass:
+    EmitOMPDistributeParallelForSimdDirective(
+        cast<OMPDistributeParallelForSimdDirective>(*S));
+    break;
+  case Stmt::OMPDistributeSimdDirectiveClass:
+    EmitOMPDistributeSimdDirective(cast<OMPDistributeSimdDirective>(*S));
+    break;
+  case Stmt::OMPTargetParallelForSimdDirectiveClass:
+    EmitOMPTargetParallelForSimdDirective(
+        cast<OMPTargetParallelForSimdDirective>(*S));
+    break;
   }
-
   // +===== ideas
   CopyKokkosDataToDevice(S);
 }
@@ -2481,7 +2484,7 @@ void CodeGenFunction::SimplifyForwardingBlocks(llvm::BasicBlock *BB) {
     return;
 
   // Can only simplify empty blocks.
-  if (BI != BB->begin())
+  if (BI->getIterator() != BB->begin())
     return;
 
   BB->replaceAllUsesWith(BI->getSuccessor(0));
@@ -2503,7 +2506,7 @@ void CodeGenFunction::EmitBlock(llvm::BasicBlock *BB, bool IsFinished) {
   // Place the block after the current block, if possible, or else at
   // the end of the function.
   if (CurBB && CurBB->getParent())
-    CurFn->getBasicBlockList().insertAfter(CurBB, BB);
+    CurFn->getBasicBlockList().insertAfter(CurBB->getIterator(), BB);
   else
     CurFn->getBasicBlockList().push_back(BB);
   Builder.SetInsertPoint(BB);
@@ -2530,7 +2533,8 @@ void CodeGenFunction::EmitBlockAfterUses(llvm::BasicBlock *block) {
   bool inserted = false;
   for (llvm::User *u : block->users()) {
     if (llvm::Instruction *insn = dyn_cast<llvm::Instruction>(u)) {
-      CurFn->getBasicBlockList().insertAfter(insn->getParent(), block);
+      CurFn->getBasicBlockList().insertAfter(insn->getParent()->getIterator(),
+                                             block);
       inserted = true;
       break;
     }
@@ -2666,13 +2670,17 @@ void CodeGenFunction::EmitIfStmt(const IfStmt &S) {
   // unequal to 0.  The condition must be a scalar type.
   LexicalScope ConditionScope(*this, S.getCond()->getSourceRange());
 
+  if (S.getInit())
+    EmitStmt(S.getInit());
+
   if (S.getConditionVariable())
     EmitAutoVarDecl(*S.getConditionVariable());
 
   // If the condition constant folds and can be elided, try to avoid emitting
   // the condition and the dead arm of the if/else.
   bool CondConstant;
-  if (ConstantFoldsToSimpleInteger(S.getCond(), CondConstant)) {
+  if (ConstantFoldsToSimpleInteger(S.getCond(), CondConstant,
+                                   S.isConstexpr())) {
     // Figure out which block (then or else) is executed.
     const Stmt *Executed = S.getThen();
     const Stmt *Skipped  = S.getElse();
@@ -2681,7 +2689,7 @@ void CodeGenFunction::EmitIfStmt(const IfStmt &S) {
 
     // If the skipped block has no labels in it, just emit the executed block.
     // This avoids emitting dead code and simplifies the CFG substantially.
-    if (!ContainsLabel(Skipped)) {
+    if (S.isConstexpr() || !ContainsLabel(Skipped)) {
       if (CondConstant)
         incrementProfileCounter(&S);
       if (Executed) {
@@ -2741,7 +2749,8 @@ void CodeGenFunction::EmitWhileStmt(const WhileStmt &S,
   JumpDest LoopHeader = getJumpDestInCurrentScope("while.cond");
   EmitBlock(LoopHeader.getBlock());
 
-  LoopStack.push(LoopHeader.getBlock(), CGM.getContext(), WhileAttrs);
+  LoopStack.push(LoopHeader.getBlock(), CGM.getContext(), WhileAttrs,
+                 Builder.getCurrentDebugLocation());
 
   // Create an exit block for when the condition fails, which will
   // also become the break target.
@@ -2832,7 +2841,8 @@ void CodeGenFunction::EmitDoStmt(const DoStmt &S,
   // Emit the body of the loop.
   llvm::BasicBlock *LoopBody = createBasicBlock("do.body");
 
-  LoopStack.push(LoopBody, CGM.getContext(), DoAttrs);
+  LoopStack.push(LoopBody, CGM.getContext(), DoAttrs,
+                 Builder.getCurrentDebugLocation());
 
   EmitBlockWithFallThrough(LoopBody, &S);
   {
@@ -2884,6 +2894,8 @@ void CodeGenFunction::EmitForStmt(const ForStmt &S,
 
   LexicalScope ForScope(*this, S.getSourceRange());
 
+  llvm::DebugLoc DL = Builder.getCurrentDebugLocation();
+
   // Evaluate the first part before the loop.
   if (S.getInit())
     EmitStmt(S.getInit());
@@ -2895,7 +2907,7 @@ void CodeGenFunction::EmitForStmt(const ForStmt &S,
   llvm::BasicBlock *CondBlock = Continue.getBlock();
   EmitBlock(CondBlock);
 
-  LoopStack.push(CondBlock, CGM.getContext(), ForAttrs);
+  LoopStack.push(CondBlock, CGM.getContext(), ForAttrs, DL);
 
   // If the for loop doesn't have an increment we can just use the
   // condition as the continue block.  Otherwise we'll need to create
@@ -2980,9 +2992,12 @@ CodeGenFunction::EmitCXXForRangeStmt(const CXXForRangeStmt &S,
 
   LexicalScope ForScope(*this, S.getSourceRange());
 
+  llvm::DebugLoc DL = Builder.getCurrentDebugLocation();
+
   // Evaluate the first pieces before the loop.
   EmitStmt(S.getRangeStmt());
-  EmitStmt(S.getBeginEndStmt());
+  EmitStmt(S.getBeginStmt());
+  EmitStmt(S.getEndStmt());
 
   // Start the loop with a block that tests the condition.
   // If there's an increment, the continue scope will be overwritten
@@ -2990,7 +3005,7 @@ CodeGenFunction::EmitCXXForRangeStmt(const CXXForRangeStmt &S,
   llvm::BasicBlock *CondBlock = createBasicBlock("for.cond");
   EmitBlock(CondBlock);
 
-  LoopStack.push(CondBlock, CGM.getContext(), ForAttrs);
+  LoopStack.push(CondBlock, CGM.getContext(), ForAttrs, DL);
 
   // If there are any cleanups between here and the loop-exit scope,
   // create a block to stage a loop exit along.
@@ -3271,7 +3286,7 @@ void CodeGenFunction::EmitCaseStmt(const CaseStmt &S) {
   // If the body of the case is just a 'break', try to not emit an empty block.
   // If we're profiling or we're not optimizing, leave the block in for better
   // debug and coverage analysis.
-  if (!CGM.getCodeGenOpts().ProfileInstrGenerate &&
+  if (!CGM.getCodeGenOpts().hasProfileClangInstr() &&
       CGM.getCodeGenOpts().OptimizationLevel > 0 &&
       isa<BreakStmt>(S.getSubStmt())) {
     JumpDest Block = BreakContinueStack.back().BreakBlock;
@@ -3318,7 +3333,7 @@ void CodeGenFunction::EmitCaseStmt(const CaseStmt &S) {
 
     if (SwitchWeights)
       SwitchWeights->push_back(getProfileCount(NextCase));
-    if (CGM.getCodeGenOpts().ProfileInstrGenerate) {
+    if (CGM.getCodeGenOpts().hasProfileClangInstr()) {
       CaseDest = createBasicBlock("sw.bb");
       EmitBlockWithFallThrough(CaseDest, &S);
     }
@@ -3332,6 +3347,14 @@ void CodeGenFunction::EmitCaseStmt(const CaseStmt &S) {
 }
 
 void CodeGenFunction::EmitDefaultStmt(const DefaultStmt &S) {
+  // If there is no enclosing switch instance that we're aware of, then this
+  // default statement can be elided. This situation only happens when we've
+  // constant-folded the switch.
+  if (!SwitchInsn) {
+    EmitStmt(S.getSubStmt());
+    return;
+  }
+
   llvm::BasicBlock *DefaultBlock = SwitchInsn->getDefaultDest();
   assert(DefaultBlock->empty() &&
          "EmitDefaultStmt: Default block already defined?");
@@ -3398,6 +3421,10 @@ static CSFC_Result CollectStatementsForCase(const Stmt *S,
     // Handle this as two cases: we might be looking for the SwitchCase (if so
     // the skipped statements must be skippable) or we might already have it.
     CompoundStmt::const_body_iterator I = CS->body_begin(), E = CS->body_end();
+    bool StartedInLiveCode = FoundCase;
+    unsigned StartSize = ResultStmts.size();
+
+    // If we've not found the case yet, scan through looking for it.
     if (Case) {
       // Keep track of whether we see a skipped declaration.  The code could be
       // using the declaration even if it is skipped, so we can't optimize out
@@ -3407,7 +3434,7 @@ static CSFC_Result CollectStatementsForCase(const Stmt *S,
       // If we're looking for the case, just see if we can skip each of the
       // substatements.
       for (; Case && I != E; ++I) {
-        HadSkippedDecl |= isa<DeclStmt>(*I);
+        HadSkippedDecl |= CodeGenFunction::mightAddDeclToScope(*I);
 
         switch (CollectStatementsForCase(*I, Case, FoundCase, ResultStmts)) {
         case CSFC_Failure: return CSFC_Failure;
@@ -3443,11 +3470,19 @@ static CSFC_Result CollectStatementsForCase(const Stmt *S,
           break;
         }
       }
+
+      if (!FoundCase)
+        return CSFC_Success;
+
+      assert(!HadSkippedDecl && "fallthrough after skipping decl");
     }
 
     // If we have statements in our range, then we know that the statements are
     // live and need to be added to the set of statements we're tracking.
+    bool AnyDecls = false;
     for (; I != E; ++I) {
+      AnyDecls |= CodeGenFunction::mightAddDeclToScope(*I);
+
       switch (CollectStatementsForCase(*I, nullptr, FoundCase, ResultStmts)) {
       case CSFC_Failure: return CSFC_Failure;
       case CSFC_FallThrough:
@@ -3465,7 +3500,24 @@ static CSFC_Result CollectStatementsForCase(const Stmt *S,
       }
     }
 
-    return Case ? CSFC_Success : CSFC_FallThrough;
+    // If we're about to fall out of a scope without hitting a 'break;', we
+    // can't perform the optimization if there were any decls in that scope
+    // (we'd lose their end-of-lifetime).
+    if (AnyDecls) {
+      // If the entire compound statement was live, there's one more thing we
+      // can try before giving up: emit the whole thing as a single statement.
+      // We can do that unless the statement contains a 'break;'.
+      // FIXME: Such a break must be at the end of a construct within this one.
+      // We could emit this by just ignoring the BreakStmts entirely.
+      if (StartedInLiveCode && !CodeGenFunction::containsBreak(S)) {
+        ResultStmts.resize(StartSize);
+        ResultStmts.push_back(S);
+      } else {
+        return CSFC_Failure;
+      }
+    }
+
+    return CSFC_FallThrough;
   }
 
   // Okay, this is some other statement that we don't handle explicitly, like a
@@ -3562,6 +3614,9 @@ void CodeGenFunction::EmitSwitchStmt(const SwitchStmt &S) {
         incrementProfileCounter(Case);
       RunCleanupsScope ExecutedScope(*this);
 
+      if (S.getInit())
+        EmitStmt(S.getInit());
+
       // Emit the condition variable if needed inside the entire cleanup scope
       // used by this special case for constant folded switches.
       if (S.getConditionVariable())
@@ -3589,6 +3644,10 @@ void CodeGenFunction::EmitSwitchStmt(const SwitchStmt &S) {
   JumpDest SwitchExit = getJumpDestInCurrentScope("sw.epilog");
 
   RunCleanupsScope ConditionScope(*this);
+
+  if (S.getInit())
+    EmitStmt(S.getInit());
+
   if (S.getConditionVariable())
     EmitAutoVarDecl(*S.getConditionVariable());
   llvm::Value *CondV = EmitScalarExpr(S.getCond());
@@ -3661,16 +3720,13 @@ void CodeGenFunction::EmitSwitchStmt(const SwitchStmt &S) {
   // If the switch has a condition wrapped by __builtin_unpredictable,
   // create metadata that specifies that the switch is unpredictable.
   // Don't bother if not optimizing because that metadata would not be used.
-  if (CGM.getCodeGenOpts().OptimizationLevel != 0) {
-    if (const CallExpr *Call = dyn_cast<CallExpr>(S.getCond())) {
-      const Decl *TargetDecl = Call->getCalleeDecl();
-      if (const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(TargetDecl)) {
-        if (FD->getBuiltinID() == Builtin::BI__builtin_unpredictable) {
-          llvm::MDBuilder MDHelper(getLLVMContext());
-          SwitchInsn->setMetadata(llvm::LLVMContext::MD_unpredictable,
-                                  MDHelper.createUnpredictable());
-        }
-      }
+  auto *Call = dyn_cast<CallExpr>(S.getCond());
+  if (Call && CGM.getCodeGenOpts().OptimizationLevel != 0) {
+    auto *FD = dyn_cast_or_null<FunctionDecl>(Call->getCalleeDecl());
+    if (FD && FD->getBuiltinID() == Builtin::BI__builtin_unpredictable) {
+      llvm::MDBuilder MDHelper(getLLVMContext());
+      SwitchInsn->setMetadata(llvm::LLVMContext::MD_unpredictable,
+                              MDHelper.createUnpredictable());
     }
   }
 
@@ -3725,9 +3781,7 @@ SimplifyConstraint(const char *Constraint, const TargetInfo &Target,
       assert(OutCons &&
              "Must pass output names to constraints with a symbolic name");
       unsigned Index;
-      bool result = Target.resolveSymbolicName(Constraint,
-                                               &(*OutCons)[0],
-                                               OutCons->size(), Index);
+      bool result = Target.resolveSymbolicName(Constraint, *OutCons, Index);
       assert(result && "Could not resolve symbolic name"); (void)result;
       Result += llvm::utostr(Index);
       break;
@@ -3822,7 +3876,8 @@ llvm::Value* CodeGenFunction::EmitAsmInput(
   if (Info.allowsRegister() || !Info.allowsMemory())
     if (CodeGenFunction::hasScalarEvaluationKind(InputExpr->getType()))
       return EmitScalarExpr(InputExpr);
-
+  if (InputExpr->getStmtClass() == Expr::CXXThisExprClass)
+    return EmitScalarExpr(InputExpr);
   InputExpr = InputExpr->IgnoreParenNoopCasts(getContext());
   LValue Dest = EmitLValue(InputExpr);
   return EmitAsmInputLValue(Info, Dest, InputExpr->getType(), ConstraintStr,
@@ -3843,13 +3898,15 @@ static llvm::MDNode *getAsmSrcLocInfo(const StringLiteral *Str,
   if (!StrVal.empty()) {
     const SourceManager &SM = CGF.CGM.getContext().getSourceManager();
     const LangOptions &LangOpts = CGF.CGM.getLangOpts();
+    unsigned StartToken = 0;
+    unsigned ByteOffset = 0;
 
     // Add the location of the start of each subsequent line of the asm to the
     // MDNode.
-    for (unsigned i = 0, e = StrVal.size()-1; i != e; ++i) {
+    for (unsigned i = 0, e = StrVal.size() - 1; i != e; ++i) {
       if (StrVal[i] != '\n') continue;
-      SourceLocation LineLoc = Str->getLocationOfByte(i+1, SM, LangOpts,
-                                                      CGF.getTarget());
+      SourceLocation LineLoc = Str->getLocationOfByte(
+          i + 1, SM, LangOpts, CGF.getTarget(), &StartToken, &ByteOffset);
       Locs.push_back(llvm::ConstantAsMetadata::get(
           llvm::ConstantInt::get(CGF.Int32Ty, LineLoc.getRawEncoding())));
     }
@@ -3882,8 +3939,7 @@ void CodeGenFunction::EmitAsmStmt(const AsmStmt &S) {
       Name = GAS->getInputName(i);
     TargetInfo::ConstraintInfo Info(S.getInputConstraint(i), Name);
     bool IsValid =
-      getTarget().validateInputConstraint(OutputConstraintInfos.data(),
-                                          S.getNumOutputs(), Info);
+      getTarget().validateInputConstraint(OutputConstraintInfos, Info);
     assert(IsValid && "Failed to parse input constraint"); (void)IsValid;
     InputConstraintInfos.push_back(Info);
   }
@@ -4127,6 +4183,15 @@ void CodeGenFunction::EmitAsmStmt(const AsmStmt &S) {
   Result->addAttribute(llvm::AttributeSet::FunctionIndex,
                        llvm::Attribute::NoUnwind);
 
+  if (isa<MSAsmStmt>(&S)) {
+    // If the assembly contains any labels, mark the call noduplicate to prevent
+    // defining the same ASM label twice (PR23715). This is pretty hacky, but it
+    // works.
+    if (AsmString.find("__MSASMLABEL_") != std::string::npos)
+      Result->addAttribute(llvm::AttributeSet::FunctionIndex,
+                           llvm::Attribute::NoDuplicate);
+  }
+
   // Attach readnone and readonly attributes.
   if (!HasSideEffect) {
     if (ReadNone)
@@ -4148,6 +4213,14 @@ void CodeGenFunction::EmitAsmStmt(const AsmStmt &S) {
     Result->setMetadata("srcloc",
                         llvm::MDNode::get(getLLVMContext(),
                                           llvm::ConstantAsMetadata::get(Loc)));
+  }
+
+  if (getLangOpts().CUDA && getLangOpts().CUDAIsDevice) {
+    // Conservatively, mark all inline asm blocks in CUDA as convergent
+    // (meaning, they may call an intrinsically convergent op, such as bar.sync,
+    // and so can't have certain optimizations applied around them).
+    Result->addAttribute(llvm::AttributeSet::FunctionIndex,
+                         llvm::Attribute::Convergent);
   }
 
   // Extract all of the register value results from the asm.
@@ -4262,8 +4335,7 @@ CodeGenFunction::GenerateCapturedStmtFunction(const CapturedStmt &S) {
   // Create the function declaration.
   FunctionType::ExtInfo ExtInfo;
   const CGFunctionInfo &FuncInfo =
-      CGM.getTypes().arrangeFreeFunctionDeclaration(Ctx.VoidTy, Args, ExtInfo,
-                                                    /*IsVariadic=*/false);
+    CGM.getTypes().arrangeBuiltinFunctionDeclaration(Ctx.VoidTy, Args);
   llvm::FunctionType *FuncLLVMTy = CGM.getTypes().GetFunctionType(FuncInfo);
 
   llvm::Function *F =
@@ -4300,7 +4372,7 @@ CodeGenFunction::GenerateCapturedStmtFunction(const CapturedStmt &S) {
     CXXThisValue = EmitLoadOfLValue(ThisLValue, Loc).getScalarVal();
   }
 
-  PGO.assignRegionCounters(CD, F);
+  PGO.assignRegionCounters(GlobalDecl(CD), F);
   CapturedStmtInfo->EmitBody(*this, CD->getBody());
   FinishFunction(CD->getBodyRBrace());
 

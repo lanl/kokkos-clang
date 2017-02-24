@@ -11,6 +11,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "clang/Tooling/Core/Replacement.h"
+
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/DiagnosticIDs.h"
 #include "clang/Basic/DiagnosticOptions.h"
@@ -18,7 +20,6 @@
 #include "clang/Basic/SourceManager.h"
 #include "clang/Lex/Lexer.h"
 #include "clang/Rewrite/Core/Rewriter.h"
-#include "clang/Tooling/Core/Replacement.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_os_ostream.h"
@@ -57,14 +58,8 @@ bool Replacement::apply(Rewriter &Rewrite) const {
   const FileEntry *Entry = SM.getFileManager().getFile(FilePath);
   if (!Entry)
     return false;
-  FileID ID;
-  // FIXME: Use SM.translateFile directly.
-  SourceLocation Location = SM.translateFileLineCol(Entry, 1, 1);
-  ID = Location.isValid() ?
-    SM.getFileID(Location) :
-    SM.createFileID(Entry, SourceLocation(), SrcMgr::C_User);
-  // FIXME: We cannot check whether Offset + Length is in the file, as
-  // the remapping API is not public in the RewriteBuffer.
+
+  FileID ID = SM.getOrCreateFileID(Entry, SrcMgr::C_User);
   const SourceLocation Start =
     SM.getLocForStartOfFile(ID).
     getLocWithOffset(ReplacementRange.getOffset());
@@ -113,15 +108,7 @@ void Replacement::setFromSourceLocation(const SourceManager &Sources,
   const std::pair<FileID, unsigned> DecomposedLocation =
       Sources.getDecomposedLoc(Start);
   const FileEntry *Entry = Sources.getFileEntryForID(DecomposedLocation.first);
-  if (Entry) {
-    // Make FilePath absolute so replacements can be applied correctly when
-    // relative paths for files are used.
-    llvm::SmallString<256> FilePath(Entry->getName());
-    std::error_code EC = llvm::sys::fs::make_absolute(FilePath);
-    this->FilePath = EC ? FilePath.c_str() : Entry->getName();
-  } else {
-    this->FilePath = InvalidLocation;
-  }
+  this->FilePath = Entry ? Entry->getName() : InvalidLocation;
   this->ReplacementRange = Range(DecomposedLocation.second, Length);
   this->ReplacementText = ReplacementText;
 }
@@ -151,34 +138,32 @@ void Replacement::setFromSourceRange(const SourceManager &Sources,
                         ReplacementText);
 }
 
-unsigned shiftedCodePosition(const Replacements &Replaces, unsigned Position) {
-  unsigned NewPosition = Position;
-  for (Replacements::iterator I = Replaces.begin(), E = Replaces.end(); I != E;
-       ++I) {
-    if (I->getOffset() >= Position)
-      break;
-    if (I->getOffset() + I->getLength() > Position)
-      NewPosition += I->getOffset() + I->getLength() - Position;
-    NewPosition += I->getReplacementText().size() - I->getLength();
+template <typename T>
+unsigned shiftedCodePositionInternal(const T &Replaces, unsigned Position) {
+  unsigned Offset = 0;
+  for (const auto& R : Replaces) {
+    if (R.getOffset() + R.getLength() <= Position) {
+      Offset += R.getReplacementText().size() - R.getLength();
+      continue;
+    }
+    if (R.getOffset() < Position &&
+        R.getOffset() + R.getReplacementText().size() <= Position) {
+      Position = R.getOffset() + R.getReplacementText().size() - 1;
+    }
+    break;
   }
-  return NewPosition;
+  return Position + Offset;
+}
+
+unsigned shiftedCodePosition(const Replacements &Replaces, unsigned Position) {
+  return shiftedCodePositionInternal(Replaces, Position);
 }
 
 // FIXME: Remove this function when Replacements is implemented as std::vector
 // instead of std::set.
 unsigned shiftedCodePosition(const std::vector<Replacement> &Replaces,
                              unsigned Position) {
-  unsigned NewPosition = Position;
-  for (std::vector<Replacement>::const_iterator I = Replaces.begin(),
-                                                E = Replaces.end();
-       I != E; ++I) {
-    if (I->getOffset() >= Position)
-      break;
-    if (I->getOffset() + I->getLength() > Position)
-      NewPosition += I->getOffset() + I->getLength() - Position;
-    NewPosition += I->getReplacementText().size() - I->getLength();
-  }
-  return NewPosition;
+  return shiftedCodePositionInternal(Replaces, Position);
 }
 
 void deduplicate(std::vector<Replacement> &Replaces,
@@ -264,32 +249,86 @@ bool applyAllReplacements(const std::vector<Replacement> &Replaces,
   return Result;
 }
 
-std::string applyAllReplacements(StringRef Code, const Replacements &Replaces) {
-  FileManager Files((FileSystemOptions()));
+llvm::Expected<std::string> applyAllReplacements(StringRef Code,
+                                                const Replacements &Replaces) {
+  if (Replaces.empty())
+    return Code.str();
+
+  IntrusiveRefCntPtr<vfs::InMemoryFileSystem> InMemoryFileSystem(
+      new vfs::InMemoryFileSystem);
+  FileManager Files(FileSystemOptions(), InMemoryFileSystem);
   DiagnosticsEngine Diagnostics(
       IntrusiveRefCntPtr<DiagnosticIDs>(new DiagnosticIDs),
       new DiagnosticOptions);
   SourceManager SourceMgr(Diagnostics, Files);
   Rewriter Rewrite(SourceMgr, LangOptions());
-  std::unique_ptr<llvm::MemoryBuffer> Buf =
-      llvm::MemoryBuffer::getMemBuffer(Code, "<stdin>");
-  const clang::FileEntry *Entry =
-      Files.getVirtualFile("<stdin>", Buf->getBufferSize(), 0);
-  SourceMgr.overrideFileContents(Entry, std::move(Buf));
-  FileID ID =
-      SourceMgr.createFileID(Entry, SourceLocation(), clang::SrcMgr::C_User);
+  InMemoryFileSystem->addFile(
+      "<stdin>", 0, llvm::MemoryBuffer::getMemBuffer(Code, "<stdin>"));
+  FileID ID = SourceMgr.createFileID(Files.getFile("<stdin>"), SourceLocation(),
+                                     clang::SrcMgr::C_User);
   for (Replacements::const_iterator I = Replaces.begin(), E = Replaces.end();
        I != E; ++I) {
     Replacement Replace("<stdin>", I->getOffset(), I->getLength(),
                         I->getReplacementText());
     if (!Replace.apply(Rewrite))
-      return "";
+      return llvm::make_error<llvm::StringError>(
+          "Failed to apply replacement: " + Replace.toString(),
+          llvm::inconvertibleErrorCode());
   }
   std::string Result;
   llvm::raw_string_ostream OS(Result);
   Rewrite.getEditBuffer(ID).write(OS);
   OS.flush();
   return Result;
+}
+
+// Merge and sort overlapping ranges in \p Ranges.
+static std::vector<Range> mergeAndSortRanges(std::vector<Range> Ranges) {
+  std::sort(Ranges.begin(), Ranges.end(),
+            [](const Range &LHS, const Range &RHS) {
+              if (LHS.getOffset() != RHS.getOffset())
+                return LHS.getOffset() < RHS.getOffset();
+              return LHS.getLength() < RHS.getLength();
+            });
+  std::vector<Range> Result;
+  for (const auto &R : Ranges) {
+    if (Result.empty() ||
+        Result.back().getOffset() + Result.back().getLength() < R.getOffset()) {
+      Result.push_back(R);
+    } else {
+      unsigned NewEnd =
+          std::max(Result.back().getOffset() + Result.back().getLength(),
+                   R.getOffset() + R.getLength());
+      Result[Result.size() - 1] =
+          Range(Result.back().getOffset(), NewEnd - Result.back().getOffset());
+    }
+  }
+  return Result;
+}
+
+std::vector<Range> calculateChangedRanges(const Replacements &Replaces) {
+  std::vector<Range> ChangedRanges;
+  int Shift = 0;
+  for (const Replacement &R : Replaces) {
+    unsigned Offset = R.getOffset() + Shift;
+    unsigned Length = R.getReplacementText().size();
+    Shift += Length - R.getLength();
+    ChangedRanges.push_back(Range(Offset, Length));
+  }
+  return mergeAndSortRanges(ChangedRanges);
+}
+
+std::vector<Range>
+calculateRangesAfterReplacements(const Replacements &Replaces,
+                                 const std::vector<Range> &Ranges) {
+  auto MergedRanges = mergeAndSortRanges(Ranges);
+  tooling::Replacements FakeReplaces;
+  for (const auto &R : MergedRanges)
+    FakeReplaces.insert(Replacement(Replaces.begin()->getFilePath(),
+                                    R.getOffset(), R.getLength(),
+                                    std::string(R.getLength(), ' ')));
+  tooling::Replacements NewReplaces = mergeReplacements(FakeReplaces, Replaces);
+  return calculateChangedRanges(NewReplaces);
 }
 
 namespace {
@@ -325,7 +364,7 @@ public:
 
   // Merges the next element 'R' into this merged element. As we always merge
   // from 'First' into 'Second' or vice versa, the MergedReplacement knows what
-  // set the next element is coming from. 
+  // set the next element is coming from.
   void merge(const Replacement &R) {
     if (MergeSecond) {
       unsigned REnd = R.getOffset() + Delta + R.getLength();
@@ -388,6 +427,15 @@ private:
 };
 } // namespace
 
+std::map<std::string, Replacements>
+groupReplacementsByFile(const Replacements &Replaces) {
+  std::map<std::string, Replacements> FileToReplaces;
+  for (const auto &Replace : Replaces) {
+    FileToReplaces[Replace.getFilePath()].insert(Replace);
+  }
+  return FileToReplaces;
+}
+
 Replacements mergeReplacements(const Replacements &First,
                                const Replacements &Second) {
   if (First.empty() || Second.empty())
@@ -427,4 +475,3 @@ Replacements mergeReplacements(const Replacements &First,
 
 } // end namespace tooling
 } // end namespace clang
-

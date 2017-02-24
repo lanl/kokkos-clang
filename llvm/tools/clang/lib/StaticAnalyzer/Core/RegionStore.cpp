@@ -14,6 +14,7 @@
 // parameters are created lazily.
 //
 //===----------------------------------------------------------------------===//
+
 #include "clang/AST/Attr.h"
 #include "clang/AST/CharUnits.h"
 #include "clang/Analysis/Analyses/LiveVariables.h"
@@ -29,6 +30,7 @@
 #include "llvm/ADT/ImmutableMap.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/Support/raw_ostream.h"
+#include <utility>
 
 using namespace clang;
 using namespace ento;
@@ -650,35 +652,24 @@ protected:
 
   RegionBindingsRef B;
 
-private:
-  GlobalsFilterKind GlobalsFilter;
 
 protected:
   const ClusterBindings *getCluster(const MemRegion *R) {
     return B.lookup(R);
   }
 
-  /// Returns true if the memory space of the given region is one of the global
-  /// regions specially included at the start of analysis.
-  bool isInitiallyIncludedGlobalRegion(const MemRegion *R) {
-    switch (GlobalsFilter) {
-    case GFK_None:
-      return false;
-    case GFK_SystemOnly:
-      return isa<GlobalSystemSpaceRegion>(R->getMemorySpace());
-    case GFK_All:
-      return isa<NonStaticGlobalSpaceRegion>(R->getMemorySpace());
-    }
-
-    llvm_unreachable("unknown globals filter");
+  /// Returns true if all clusters in the given memspace should be initially
+  /// included in the cluster analysis. Subclasses may provide their
+  /// own implementation.
+  bool includeEntireMemorySpace(const MemRegion *Base) {
+    return false;
   }
 
 public:
   ClusterAnalysis(RegionStoreManager &rm, ProgramStateManager &StateMgr,
-                  RegionBindingsRef b, GlobalsFilterKind GFK)
-    : RM(rm), Ctx(StateMgr.getContext()),
-      svalBuilder(StateMgr.getSValBuilder()),
-      B(b), GlobalsFilter(GFK) {}
+                  RegionBindingsRef b)
+      : RM(rm), Ctx(StateMgr.getContext()),
+        svalBuilder(StateMgr.getSValBuilder()), B(std::move(b)) {}
 
   RegionBindingsRef getRegionBindings() const { return B; }
 
@@ -696,8 +687,9 @@ public:
       assert(!Cluster.isEmpty() && "Empty clusters should be removed");
       static_cast<DERIVED*>(this)->VisitAddedToCluster(Base, Cluster);
 
-      // If this is an interesting global region, add it the work list up front.
-      if (isInitiallyIncludedGlobalRegion(Base))
+      // If the base's memspace should be entirely invalidated, add the cluster
+      // to the workspace up front.
+      if (static_cast<DERIVED*>(this)->includeEntireMemorySpace(Base))
         AddToWorkList(WorkListElement(Base), &Cluster);
     }
   }
@@ -940,6 +932,7 @@ class invalidateRegionsWorker : public ClusterAnalysis<invalidateRegionsWorker>
   InvalidatedSymbols &IS;
   RegionAndSymbolInvalidationTraits &ITraits;
   StoreManager::InvalidatedRegions *Regions;
+  GlobalsFilterKind GlobalsFilter;
 public:
   invalidateRegionsWorker(RegionStoreManager &rm,
                           ProgramStateManager &stateMgr,
@@ -950,8 +943,9 @@ public:
                           RegionAndSymbolInvalidationTraits &ITraitsIn,
                           StoreManager::InvalidatedRegions *r,
                           GlobalsFilterKind GFK)
-    : ClusterAnalysis<invalidateRegionsWorker>(rm, stateMgr, b, GFK),
-      Ex(ex), Count(count), LCtx(lctx), IS(is), ITraits(ITraitsIn), Regions(r){}
+     : ClusterAnalysis<invalidateRegionsWorker>(rm, stateMgr, b),
+       Ex(ex), Count(count), LCtx(lctx), IS(is), ITraits(ITraitsIn), Regions(r),
+       GlobalsFilter(GFK) {}
 
   void VisitCluster(const MemRegion *baseR, const ClusterBindings *C);
   void VisitBinding(SVal V);
@@ -959,6 +953,14 @@ public:
   using ClusterAnalysis::AddToWorkList;
 
   bool AddToWorkList(const MemRegion *R);
+
+  /// Returns true if all clusters in the memory space for \p Base should be
+  /// be invalidated.
+  bool includeEntireMemorySpace(const MemRegion *Base);
+
+  /// Returns true if the memory space of the given region is one of the global
+  /// regions specially included at the start of invalidation.
+  bool isInitiallyIncludedGlobalRegion(const MemRegion *R);
 };
 }
 
@@ -1129,11 +1131,10 @@ void invalidateRegionsWorker::VisitCluster(const MemRegion *baseR,
         // Check offset is not symbolic and within array's boundaries.
         // Handles arrays of 0 elements and of 0-sized elements as well.
         if (!ROffset ||
-            (ROffset &&
-             ((*ROffset >= LowerOffset && *ROffset < UpperOffset) ||
-              (UpperOverflow &&
-               (*ROffset >= LowerOffset || *ROffset < UpperOffset)) ||
-              (LowerOffset == UpperOffset && *ROffset == LowerOffset)))) {
+            ((*ROffset >= LowerOffset && *ROffset < UpperOffset) ||
+             (UpperOverflow &&
+              (*ROffset >= LowerOffset || *ROffset < UpperOffset)) ||
+             (LowerOffset == UpperOffset && *ROffset == LowerOffset))) {
           B = B.removeBinding(I.getKey());
           // Bound symbolic regions need to be invalidated for dead symbol
           // detection.
@@ -1157,6 +1158,29 @@ void invalidateRegionsWorker::VisitCluster(const MemRegion *baseR,
                                                         T,Count);
   assert(SymbolManager::canSymbolicate(T) || V.isUnknown());
   B = B.addBinding(baseR, BindingKey::Direct, V);
+}
+
+bool invalidateRegionsWorker::isInitiallyIncludedGlobalRegion(
+    const MemRegion *R) {
+  switch (GlobalsFilter) {
+  case GFK_None:
+    return false;
+  case GFK_SystemOnly:
+    return isa<GlobalSystemSpaceRegion>(R->getMemorySpace());
+  case GFK_All:
+    return isa<NonStaticGlobalSpaceRegion>(R->getMemorySpace());
+  }
+
+  llvm_unreachable("unknown globals filter");
+}
+
+bool invalidateRegionsWorker::includeEntireMemorySpace(const MemRegion *Base) {
+  if (isInitiallyIncludedGlobalRegion(Base))
+    return true;
+
+  const MemSpaceRegion *MemSpace = Base->getMemorySpace();
+  return ITraits.hasTrait(MemSpace,
+                          RegionAndSymbolInvalidationTraits::TK_EntireMemSpace);
 }
 
 RegionBindingsRef
@@ -1340,6 +1364,10 @@ SVal RegionStoreManager::getBinding(RegionBindingsConstRef B, Loc L, QualType T)
   }
 
   const MemRegion *MR = L.castAs<loc::MemRegionVal>().getRegion();
+
+  if (isa<BlockDataRegion>(MR)) {
+    return UnknownVal();
+  }
 
   if (isa<AllocaRegion>(MR) ||
       isa<SymbolicRegion>(MR) ||
@@ -2253,7 +2281,7 @@ public:
                            ProgramStateManager &stateMgr,
                            RegionBindingsRef b, SymbolReaper &symReaper,
                            const StackFrameContext *LCtx)
-    : ClusterAnalysis<removeDeadBindingsWorker>(rm, stateMgr, b, GFK_None),
+    : ClusterAnalysis<removeDeadBindingsWorker>(rm, stateMgr, b),
       SymReaper(symReaper), CurrentLCtx(LCtx) {}
 
   // Called by ClusterAnalysis.
@@ -2320,8 +2348,12 @@ void removeDeadBindingsWorker::VisitCluster(const MemRegion *baseR,
   if (const SymbolicRegion *SymR = dyn_cast<SymbolicRegion>(baseR))
     SymReaper.markLive(SymR->getSymbol());
 
-  for (ClusterBindings::iterator I = C->begin(), E = C->end(); I != E; ++I)
+  for (ClusterBindings::iterator I = C->begin(), E = C->end(); I != E; ++I) {
+    // Element index of a binding key is live.
+    SymReaper.markElementIndicesLive(I.getKey().getRegion());
+
     VisitBinding(I.getData());
+  }
 }
 
 void removeDeadBindingsWorker::VisitBinding(SVal V) {
@@ -2342,6 +2374,7 @@ void removeDeadBindingsWorker::VisitBinding(SVal V) {
   // If V is a region, then add it to the worklist.
   if (const MemRegion *R = V.getAsRegion()) {
     AddToWorkList(R);
+    SymReaper.markLive(R);
 
     // All regions captured by a block are also live.
     if (const BlockDataRegion *BR = dyn_cast<BlockDataRegion>(R)) {

@@ -39,6 +39,7 @@ const char TestProgram[] =
     "EmitCXXGlobalInitFunc test;    ";
 
 TEST(BufferSourceTest, EmitCXXGlobalInitFunc) {
+    LLVMContext Context;
     CompilerInstance compiler;
 
     compiler.createDiagnostics();
@@ -65,9 +66,9 @@ TEST(BufferSourceTest, EmitCXXGlobalInitFunc) {
             compiler.getHeaderSearchOpts(),
             compiler.getPreprocessorOpts(),
             compiler.getCodeGenOpts(),
-            llvm::getGlobalContext())));
+            Context)));
 
-    compiler.createSema(clang::TU_Prefix,NULL);
+    compiler.createSema(clang::TU_Prefix, nullptr);
 
     clang::SourceManager &sm = compiler.getSourceManager();
     sm.setMainFileID(sm.createFileID(
@@ -76,4 +77,4 @@ TEST(BufferSourceTest, EmitCXXGlobalInitFunc) {
     clang::ParseAST(compiler.getSema(), false, false);
 }
 
-}
+} // end anonymous namespace

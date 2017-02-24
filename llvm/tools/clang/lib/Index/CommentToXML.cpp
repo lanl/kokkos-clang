@@ -592,9 +592,8 @@ void getSourceTextOfDeclaration(const DeclInfo *ThisDecl,
 
 void CommentASTToXMLConverter::formatTextOfDeclaration(
     const DeclInfo *DI, SmallString<128> &Declaration) {
-  // FIXME. formatting API expects null terminated input string.
-  // There might be more efficient way of doing this.
-  std::string StringDecl = Declaration.str();
+  // Formatting API expects null terminated input string.
+  StringRef StringDecl(Declaration.c_str(), Declaration.size());
 
   // Formatter specific code.
   // Form a unique in memory buffer name.
@@ -894,7 +893,7 @@ void CommentASTToXMLConverter::visitFullComment(const FullComment *C) {
       FileID FID = LocInfo.first;
       unsigned FileOffset = LocInfo.second;
 
-      if (!FID.isInvalid()) {
+      if (FID.isValid()) {
         if (const FileEntry *FE = SM.getFileEntryForID(FID)) {
           Result << " file=\"";
           appendToResultWithXMLEscaping(FE->getName());

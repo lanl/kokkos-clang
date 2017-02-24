@@ -164,9 +164,7 @@ private:
   bool isRegInClass(unsigned Reg, const TargetRegisterClass *RC) {
     if (TargetRegisterInfo::isVirtualRegister(Reg))
       return RC->hasSubClassEq(MRI->getRegClass(Reg));
-    if (RC->contains(Reg))
-      return true;
-    return false;
+    return RC->contains(Reg);
   }
 
   // Return true iff the given register is a full vector register.
@@ -193,6 +191,9 @@ private:
 public:
   // Main entry point for this pass.
   bool runOnMachineFunction(MachineFunction &MF) override {
+    if (skipFunction(*MF.getFunction()))
+      return false;
+
     // If we don't have VSX on the subtarget, don't do anything.
     const PPCSubtarget &STI = MF.getSubtarget<PPCSubtarget>();
     if (!STI.hasVSX())
@@ -220,7 +221,7 @@ public:
 void PPCVSXSwapRemoval::initialize(MachineFunction &MFParm) {
   MF = &MFParm;
   MRI = &MF->getRegInfo();
-  TII = static_cast<const PPCInstrInfo*>(MF->getSubtarget().getInstrInfo());
+  TII = MF->getSubtarget<PPCSubtarget>().getInstrInfo();
 
   // An initial vector size of 256 appears to work well in practice.
   // Small/medium functions with vector content tend not to incur a
@@ -406,9 +407,9 @@ bool PPCVSXSwapRemoval::gatherVectorInstructions() {
       case PPC::VSPLTB:
       case PPC::VSPLTH:
       case PPC::VSPLTW:
+      case PPC::XXSPLTW:
         // Splats are lane-sensitive, but we can use special handling
-        // to adjust the source lane for the splat.  This is not yet
-        // implemented.  When it is, we need to uncomment the following:
+        // to adjust the source lane for the splat.
         SwapVector[VecIdx].IsSwappable = 1;
         SwapVector[VecIdx].SpecialHandling = SHValues::SH_SPLAT;
         break;
@@ -514,7 +515,6 @@ bool PPCVSXSwapRemoval::gatherVectorInstructions() {
       // permute control vectors (for shift values 1, 2, 3).  However,
       // VPERM has a more restrictive register class.
       case PPC::XXSLDWI:
-      case PPC::XXSPLTW:
         break;
       }
     }
@@ -692,6 +692,7 @@ void PPCVSXSwapRemoval::recordUnoptimizableWebs() {
       MachineInstr *MI = SwapVector[EntryIdx].VSEMI;
       unsigned UseReg = MI->getOperand(0).getReg();
       MachineInstr *DefMI = MRI->getVRegDef(UseReg);
+      unsigned DefReg = DefMI->getOperand(0).getReg();
       int DefIdx = SwapMap[DefMI];
 
       if (!SwapVector[DefIdx].IsSwap || SwapVector[DefIdx].IsLoad ||
@@ -706,6 +707,25 @@ void PPCVSXSwapRemoval::recordUnoptimizableWebs() {
         DEBUG(dbgs() << "  use " << EntryIdx << ": ");
         DEBUG(MI->dump());
         DEBUG(dbgs() << "\n");
+      }
+
+      // Ensure all uses of the register defined by DefMI feed store
+      // instructions
+      for (MachineInstr &UseMI : MRI->use_nodbg_instructions(DefReg)) {
+        int UseIdx = SwapMap[&UseMI];
+
+        if (SwapVector[UseIdx].VSEMI->getOpcode() != MI->getOpcode()) {
+          SwapVector[Repr].WebRejected = 1;
+
+          DEBUG(dbgs() <<
+                format("Web %d rejected for swap not feeding only stores\n",
+                       Repr));
+          DEBUG(dbgs() << "  def " << " : ");
+          DEBUG(DefMI->dump());
+          DEBUG(dbgs() << "  use " << UseIdx << ": ");
+          DEBUG(SwapVector[UseIdx].VSEMI->dump());
+          DEBUG(dbgs() << "\n");
+        }
       }
     }
   }
@@ -789,8 +809,7 @@ void PPCVSXSwapRemoval::handleSpecialSwappables(int EntryIdx) {
   switch (SwapVector[EntryIdx].SpecialHandling) {
 
   default:
-    assert(false && "Unexpected special handling type");
-    break;
+    llvm_unreachable("Unexpected special handling type");
 
   // For splats based on an index into a vector, add N/2 modulo N
   // to the index, where N is the number of vector elements.
@@ -803,15 +822,24 @@ void PPCVSXSwapRemoval::handleSpecialSwappables(int EntryIdx) {
 
     switch (MI->getOpcode()) {
     default:
-      assert(false && "Unexpected splat opcode");
+      llvm_unreachable("Unexpected splat opcode");
     case PPC::VSPLTB: NElts = 16; break;
     case PPC::VSPLTH: NElts = 8;  break;
-    case PPC::VSPLTW: NElts = 4;  break;
+    case PPC::VSPLTW:
+    case PPC::XXSPLTW: NElts = 4;  break;
     }
 
-    unsigned EltNo = MI->getOperand(1).getImm();
+    unsigned EltNo;
+    if (MI->getOpcode() == PPC::XXSPLTW)
+      EltNo = MI->getOperand(2).getImm();
+    else
+      EltNo = MI->getOperand(1).getImm();
+
     EltNo = (EltNo + NElts / 2) % NElts;
-    MI->getOperand(1).setImm(EltNo);
+    if (MI->getOpcode() == PPC::XXSPLTW)
+      MI->getOperand(2).setImm(EltNo);
+    else
+      MI->getOperand(1).setImm(EltNo);
 
     DEBUG(dbgs() << "  Into: ");
     DEBUG(MI->dump());
@@ -862,7 +890,7 @@ void PPCVSXSwapRemoval::handleSpecialSwappables(int EntryIdx) {
     DEBUG(dbgs() << "  Into: ");
     DEBUG(MI->dump());
 
-    MachineBasicBlock::iterator InsertPoint = MI->getNextNode();
+    auto InsertPoint = ++MachineBasicBlock::iterator(MI);
 
     // Note that an XXPERMDI requires a VSRC, so if the SUBREG_TO_REG
     // is copying to a VRRC, we need to be careful to avoid a register
@@ -876,19 +904,19 @@ void PPCVSXSwapRemoval::handleSpecialSwappables(int EntryIdx) {
       BuildMI(*MI->getParent(), InsertPoint, MI->getDebugLoc(),
               TII->get(PPC::COPY), VSRCTmp1)
         .addReg(NewVReg);
-      DEBUG(MI->getNextNode()->dump());
+      DEBUG(std::prev(InsertPoint)->dump());
 
       insertSwap(MI, InsertPoint, VSRCTmp2, VSRCTmp1);
-      DEBUG(MI->getNextNode()->getNextNode()->dump());
+      DEBUG(std::prev(InsertPoint)->dump());
 
       BuildMI(*MI->getParent(), InsertPoint, MI->getDebugLoc(),
               TII->get(PPC::COPY), DstReg)
         .addReg(VSRCTmp2);
-      DEBUG(MI->getNextNode()->getNextNode()->getNextNode()->dump());
+      DEBUG(std::prev(InsertPoint)->dump());
 
     } else {
       insertSwap(MI, InsertPoint, DstReg, NewVReg);
-      DEBUG(MI->getNextNode()->dump());
+      DEBUG(std::prev(InsertPoint)->dump());
     }
     break;
   }

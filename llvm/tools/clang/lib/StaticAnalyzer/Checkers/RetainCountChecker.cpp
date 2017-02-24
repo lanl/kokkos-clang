@@ -12,8 +12,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "ClangSACheckers.h"
 #include "AllocationDiagnostics.h"
+#include "ClangSACheckers.h"
 #include "SelectorExtras.h"
 #include "clang/AST/Attr.h"
 #include "clang/AST/DeclCXX.h"
@@ -39,6 +39,7 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
 #include <cstdarg>
+#include <utility>
 
 using namespace clang;
 using namespace ento;
@@ -234,6 +235,7 @@ public:
     return RefVal(getKind(), getObjKind(), getCount(), getAutoreleaseCount(),
                   getType(), IvarAccessHistory::AccessedDirectly);
   }
+
   RefVal releaseViaIvar() const {
     assert(getIvarAccessHistory() == IvarAccessHistory::AccessedDirectly);
     return RefVal(getKind(), getObjKind(), getCount(), getAutoreleaseCount(),
@@ -484,7 +486,7 @@ public:
   IdentifierInfo *getIdentifier() const { return II; }
   Selector getSelector() const { return S; }
 };
-}
+} // end anonymous namespace
 
 namespace llvm {
 template <> struct DenseMapInfo<ObjCSummaryKey> {
@@ -985,7 +987,6 @@ void RetainSummaryManager::updateSummaryForCall(const RetainSummary *&S,
         ModifiableSummaryTemplate->setRetEffect(RetEffect::MakeNoRet());
       }
     }
-
   }
 }
 
@@ -2192,6 +2193,7 @@ PathDiagnosticPiece *CFRefReportVisitor::VisitNode(const ExplodedNode *N,
   return P;
 }
 
+namespace {
 // Find the first node in the current function context that referred to the
 // tracked symbol and the memory location that value was stored to. Note, the
 // value is only reported if the allocation occurred in the same function as
@@ -2206,6 +2208,7 @@ struct AllocationInfo {
                  const LocationContext *InInterestingMethodContext) :
     N(InN), R(InR), InterestingMethodContext(InInterestingMethodContext) {}
 };
+} // end anonymous namespace
 
 static AllocationInfo
 GetAllocationSite(ProgramStateManager& StateMgr, const ExplodedNode *N,
@@ -2414,7 +2417,7 @@ CFRefLeakReport::CFRefLeakReport(CFRefBug &D, const LangOptions &LOpts,
   // FIXME: This will crash the analyzer if an allocation comes from an
   // implicit call (ex: a destructor call).
   // (Currently there are no such allocations in Cocoa, though.)
-  const Stmt *AllocStmt = 0;
+  const Stmt *AllocStmt = nullptr;
   ProgramPoint P = AllocNode->getLocation();
   if (Optional<CallExitEnd> Exit = P.getAs<CallExitEnd>())
     AllocStmt = Exit->getCalleeContext()->getCallSite();
@@ -2681,7 +2684,7 @@ namespace {
 class StopTrackingCallback final : public SymbolVisitor {
   ProgramStateRef state;
 public:
-  StopTrackingCallback(ProgramStateRef st) : state(st) {}
+  StopTrackingCallback(ProgramStateRef st) : state(std::move(st)) {}
   ProgramStateRef getState() const { return state; }
 
   bool VisitSymbol(SymbolRef sym) override {
@@ -2830,14 +2833,6 @@ void RetainCountChecker::checkPostStmt(const ObjCBoxedExpr *Ex,
   C.addTransition(State);
 }
 
-static bool wasLoadedFromIvar(SymbolRef Sym) {
-  if (auto DerivedVal = dyn_cast<SymbolDerived>(Sym))
-    return isa<ObjCIvarRegion>(DerivedVal->getRegion());
-  if (auto RegionVal = dyn_cast<SymbolRegionValue>(Sym))
-    return isa<ObjCIvarRegion>(RegionVal->getRegion());
-  return false;
-}
-
 void RetainCountChecker::checkPostStmt(const ObjCIvarRefExpr *IRE,
                                        CheckerContext &C) const {
   Optional<Loc> IVarLoc = C.getSVal(IRE).getAs<Loc>();
@@ -2846,7 +2841,7 @@ void RetainCountChecker::checkPostStmt(const ObjCIvarRefExpr *IRE,
 
   ProgramStateRef State = C.getState();
   SymbolRef Sym = State->getSVal(*IVarLoc).getAsSymbol();
-  if (!Sym || !wasLoadedFromIvar(Sym))
+  if (!Sym || !dyn_cast_or_null<ObjCIvarRegion>(Sym->getOriginRegion()))
     return;
 
   // Accessing an ivar directly is unusual. If we've done that, be more
@@ -3128,7 +3123,6 @@ void RetainCountChecker::checkSummary(const RetainSummary &Summ,
     SummaryLog[NewNode] = &Summ;
   }
 }
-
 
 ProgramStateRef
 RetainCountChecker::updateSymbol(ProgramStateRef state, SymbolRef sym,
@@ -3531,7 +3525,7 @@ void RetainCountChecker::checkReturnWithRetEffect(const ReturnStmt *S,
                                                   ExplodedNode *Pred,
                                                   RetEffect RE, RefVal X,
                                                   SymbolRef Sym,
-                                              ProgramStateRef state) const {
+                                                  ProgramStateRef state) const {
   // HACK: Ignore retain-count issues on values accessed through ivars,
   // because of cases like this:
   //   [_contentView retain];
@@ -3669,7 +3663,6 @@ void RetainCountChecker::checkBind(SVal loc, SVal val, const Stmt *S,
 ProgramStateRef RetainCountChecker::evalAssume(ProgramStateRef state,
                                                    SVal Cond,
                                                    bool Assumption) const {
-
   // FIXME: We may add to the interface of evalAssume the list of symbols
   //  whose assumptions have changed.  For now we just iterate through the
   //  bindings and check if any of the tracked symbols are NULL.  This isn't
@@ -3993,7 +3986,9 @@ void ento::registerRetainCountChecker(CheckerManager &Mgr) {
 // Implementation of the CallEffects API.
 //===----------------------------------------------------------------------===//
 
-namespace clang { namespace ento { namespace objc_retain {
+namespace clang {
+namespace ento {
+namespace objc_retain {
 
 // This is a bit gross, but it allows us to populate CallEffects without
 // creating a bunch of accessors.  This kind is very localized, so the
@@ -4022,4 +4017,6 @@ CallEffects CallEffects::getEffect(const FunctionDecl *FD) {
 
 #undef createCallEffect
 
-}}}
+} // end namespace objc_retain
+} // end namespace ento
+} // end namespace clang

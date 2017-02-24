@@ -194,6 +194,9 @@ void ModuleManager::removeModules(
   if (first == last)
     return;
 
+  // Explicitly clear VisitOrder since we might not notice it is stale.
+  VisitOrder.clear();
+
   // Collect the set of module file pointers that we'll be removing.
   llvm::SmallPtrSet<ModuleFile *, 4> victimSet(first, last);
 
@@ -317,11 +320,11 @@ void ModuleManager::visit(llvm::function_ref<bool(ModuleFile &M)> Visitor,
     Queue.reserve(N);
     llvm::SmallVector<unsigned, 4> UnusedIncomingEdges;
     UnusedIncomingEdges.resize(size());
-    for (auto M = rbegin(), MEnd = rend(); M != MEnd; ++M) {
-      unsigned Size = (*M)->ImportedBy.size();
-      UnusedIncomingEdges[(*M)->Index] = Size;
+    for (ModuleFile *M : llvm::reverse(*this)) {
+      unsigned Size = M->ImportedBy.size();
+      UnusedIncomingEdges[M->Index] = Size;
       if (!Size)
-        Queue.push_back(*M);
+        Queue.push_back(M);
     }
 
     // Traverse the graph, making sure to visit a module before visiting any

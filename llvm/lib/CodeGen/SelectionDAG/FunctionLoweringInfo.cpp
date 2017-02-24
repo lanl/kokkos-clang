@@ -87,6 +87,8 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
   TLI = MF->getSubtarget().getTargetLowering();
   RegInfo = &MF->getRegInfo();
   MachineModuleInfo &MMI = MF->getMMI();
+  const TargetFrameLowering *TFI = MF->getSubtarget().getFrameLowering();
+  unsigned StackAlign = TFI->getStackAlignment();
 
   // Check whether the function can return without sret-demotion.
   SmallVector<ISD::OutputArg, 4> Outs;
@@ -94,6 +96,31 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
                 mf.getDataLayout());
   CanLowerReturn = TLI->CanLowerReturn(Fn->getCallingConv(), *MF,
                                        Fn->isVarArg(), Outs, Fn->getContext());
+
+  // If this personality uses funclets, we need to do a bit more work.
+  DenseMap<const AllocaInst *, int *> CatchObjects;
+  EHPersonality Personality = classifyEHPersonality(
+      Fn->hasPersonalityFn() ? Fn->getPersonalityFn() : nullptr);
+  if (isFuncletEHPersonality(Personality)) {
+    // Calculate state numbers if we haven't already.
+    WinEHFuncInfo &EHInfo = *MF->getWinEHFuncInfo();
+    if (Personality == EHPersonality::MSVC_CXX)
+      calculateWinCXXEHStateNumbers(&fn, EHInfo);
+    else if (isAsynchronousEHPersonality(Personality))
+      calculateSEHStateNumbers(&fn, EHInfo);
+    else if (Personality == EHPersonality::CoreCLR)
+      calculateClrEHStateNumbers(&fn, EHInfo);
+
+    // Map all BB references in the WinEH data to MBBs.
+    for (WinEHTryBlockMapEntry &TBME : EHInfo.TryBlockMap) {
+      for (WinEHHandlerType &H : TBME.HandlerArray) {
+        if (const AllocaInst *AI = H.CatchObj.Alloca)
+          CatchObjects.insert({AI, &H.CatchObj.FrameIndex});
+        else
+          H.CatchObj.FrameIndex = INT_MAX;
+      }
+    }
+  }
 
   // Initialize the mapping of values to registers.  This is only set up for
   // instruction values that are used outside of the block that defines
@@ -103,28 +130,40 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
     for (BasicBlock::const_iterator I = BB->begin(), E = BB->end();
          I != E; ++I) {
       if (const AllocaInst *AI = dyn_cast<AllocaInst>(I)) {
-        // Static allocas can be folded into the initial stack frame adjustment.
-        if (AI->isStaticAlloca()) {
+        Type *Ty = AI->getAllocatedType();
+        unsigned Align =
+          std::max((unsigned)MF->getDataLayout().getPrefTypeAlignment(Ty),
+                   AI->getAlignment());
+
+        // Static allocas can be folded into the initial stack frame
+        // adjustment. For targets that don't realign the stack, don't
+        // do this if there is an extra alignment requirement.
+        if (AI->isStaticAlloca() && 
+            (TFI->isStackRealignable() || (Align <= StackAlign))) {
           const ConstantInt *CUI = cast<ConstantInt>(AI->getArraySize());
-          Type *Ty = AI->getAllocatedType();
           uint64_t TySize = MF->getDataLayout().getTypeAllocSize(Ty);
-          unsigned Align =
-              std::max((unsigned)MF->getDataLayout().getPrefTypeAlignment(Ty),
-                       AI->getAlignment());
 
           TySize *= CUI->getZExtValue();   // Get total allocated size.
           if (TySize == 0) TySize = 1; // Don't create zero-sized stack objects.
+          int FrameIndex = INT_MAX;
+          auto Iter = CatchObjects.find(AI);
+          if (Iter != CatchObjects.end() && TLI->needsFixedCatchObjects()) {
+            FrameIndex = MF->getFrameInfo()->CreateFixedObject(
+                TySize, 0, /*Immutable=*/false, /*isAliased=*/true);
+            MF->getFrameInfo()->setObjectAlignment(FrameIndex, Align);
+          } else {
+            FrameIndex =
+                MF->getFrameInfo()->CreateStackObject(TySize, Align, false, AI);
+          }
 
-          StaticAllocaMap[AI] =
-            MF->getFrameInfo()->CreateStackObject(TySize, Align, false, AI);
-
+          StaticAllocaMap[AI] = FrameIndex;
+          // Update the catch handler information.
+          if (Iter != CatchObjects.end())
+            *Iter->second = FrameIndex;
         } else {
-          unsigned Align =
-              std::max((unsigned)MF->getDataLayout().getPrefTypeAlignment(
-                           AI->getAllocatedType()),
-                       AI->getAlignment());
-          unsigned StackAlign =
-              MF->getSubtarget().getFrameLowering()->getStackAlignment();
+          // FIXME: Overaligned static allocas should be grouped into
+          // a single dynamic allocation instead of using a separate
+          // stack allocation for each one.
           if (Align <= StackAlign)
             Align = 0;
           // Inform the Frame Information that we have variable-sized objects.
@@ -134,7 +173,7 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
 
       // Look for inline asm that clobbers the SP register.
       if (isa<CallInst>(I) || isa<InvokeInst>(I)) {
-        ImmutableCallSite CS(I);
+        ImmutableCallSite CS(&*I);
         if (isa<InlineAsm>(CS.getCalledValue())) {
           unsigned SP = TLI->getStackPointerRegisterToSaveRestore();
           const TargetRegisterInfo *TRI = MF->getSubtarget().getRegisterInfo();
@@ -163,7 +202,7 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
           MF->getFrameInfo()->setHasVAStart(true);
       }
 
-      // If we have a musttail call in a variadic funciton, we need to ensure we
+      // If we have a musttail call in a variadic function, we need to ensure we
       // forward implicit register parameters.
       if (const auto *CI = dyn_cast<CallInst>(I)) {
         if (CI->isMustTailCall() && Fn->isVarArg())
@@ -172,10 +211,9 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
 
       // Mark values used outside their block as exported, by allocating
       // a virtual register for them.
-      if (isUsedOutsideOfDefiningBlock(I))
-        if (!isa<AllocaInst>(I) ||
-            !StaticAllocaMap.count(cast<AllocaInst>(I)))
-          InitializeRegForValue(I);
+      if (isUsedOutsideOfDefiningBlock(&*I))
+        if (!isa<AllocaInst>(I) || !StaticAllocaMap.count(cast<AllocaInst>(I)))
+          InitializeRegForValue(&*I);
 
       // Collect llvm.dbg.declare information. This is done now instead of
       // during the initial isel pass through the IR so that it is done
@@ -205,7 +243,7 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
       }
 
       // Decide the preferred extend type for a value.
-      PreferredExtendType[I] = getPreferredExtendForValue(I);
+      PreferredExtendType[&*I] = getPreferredExtendForValue(&*I);
     }
 
   // Create an initial MachineBasicBlock for each LLVM BasicBlock in F.  This
@@ -216,18 +254,25 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
     // are really data, and no instructions can live here.
     if (BB->isEHPad()) {
       const Instruction *I = BB->getFirstNonPHI();
-      if (!isa<LandingPadInst>(I))
+      // If this is a non-landingpad EH pad, mark this function as using
+      // funclets.
+      // FIXME: SEH catchpads do not create funclets, so we could avoid setting
+      // this in such cases in order to improve frame layout.
+      if (!isa<LandingPadInst>(I)) {
         MMI.setHasEHFunclets(true);
-      if (isa<CatchPadInst>(I) || isa<CatchEndPadInst>(I) ||
-          isa<CleanupEndPadInst>(I)) {
+        MF->getFrameInfo()->setHasOpaqueSPAdjustment(true);
+      }
+      if (isa<CatchSwitchInst>(I)) {
         assert(&*BB->begin() == I &&
                "WinEHPrepare failed to remove PHIs from imaginary BBs");
         continue;
       }
+      if (isa<FuncletPadInst>(I))
+        assert(&*BB->begin() == I && "WinEHPrepare failed to demote PHIs");
     }
 
-    MachineBasicBlock *MBB = mf.CreateMachineBasicBlock(BB);
-    MBBMap[BB] = MBB;
+    MachineBasicBlock *MBB = mf.CreateMachineBasicBlock(&*BB);
+    MBBMap[&*BB] = MBB;
     MF->push_back(MBB);
 
     // Transfer the address-taken flag. This is necessary because there could
@@ -267,108 +312,34 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
   SmallVector<const LandingPadInst *, 4> LPads;
   for (BB = Fn->begin(); BB != EB; ++BB) {
     const Instruction *FNP = BB->getFirstNonPHI();
-    if (BB->isEHPad() && MBBMap.count(BB))
-      MBBMap[BB]->setIsEHPad();
+    if (BB->isEHPad() && MBBMap.count(&*BB))
+      MBBMap[&*BB]->setIsEHPad();
     if (const auto *LPI = dyn_cast<LandingPadInst>(FNP))
       LPads.push_back(LPI);
   }
 
-  // If this is an MSVC EH personality, we need to do a bit more work.
-  if (!Fn->hasPersonalityFn())
-    return;
-  EHPersonality Personality = classifyEHPersonality(Fn->getPersonalityFn());
-  if (!isMSVCEHPersonality(Personality))
+  if (!isFuncletEHPersonality(Personality))
     return;
 
-  if (Personality == EHPersonality::MSVC_Win64SEH ||
-      Personality == EHPersonality::MSVC_X86SEH) {
-    addSEHHandlersForLPads(LPads);
-  }
-
-  // Calculate state numbers if we haven't already.
-  WinEHFuncInfo &EHInfo = MMI.getWinEHFuncInfo(&fn);
-  const Function *WinEHParentFn = MMI.getWinEHParent(&fn);
-  if (Personality == EHPersonality::MSVC_CXX)
-    calculateWinCXXEHStateNumbers(WinEHParentFn, EHInfo);
-  else
-    calculateSEHStateNumbers(WinEHParentFn, EHInfo);
+  WinEHFuncInfo &EHInfo = *MF->getWinEHFuncInfo();
 
   // Map all BB references in the WinEH data to MBBs.
   for (WinEHTryBlockMapEntry &TBME : EHInfo.TryBlockMap) {
     for (WinEHHandlerType &H : TBME.HandlerArray) {
-      if (H.CatchObjRecoverIdx == -2 && H.CatchObj.Alloca) {
-        assert(StaticAllocaMap.count(H.CatchObj.Alloca));
-        H.CatchObj.FrameIndex = StaticAllocaMap[H.CatchObj.Alloca];
-      } else {
-        H.CatchObj.FrameIndex = INT_MAX;
-      }
-      if (const auto *BB = dyn_cast<BasicBlock>(H.Handler.get<const Value *>()))
-        H.Handler = MBBMap[BB];
+      if (H.Handler)
+        H.Handler = MBBMap[H.Handler.get<const BasicBlock *>()];
     }
   }
-  for (WinEHUnwindMapEntry &UME : EHInfo.UnwindMap)
+  for (CxxUnwindMapEntry &UME : EHInfo.CxxUnwindMap)
     if (UME.Cleanup)
-      if (const auto *BB = dyn_cast<BasicBlock>(UME.Cleanup.get<const Value *>()))
-        UME.Cleanup = MBBMap[BB];
+      UME.Cleanup = MBBMap[UME.Cleanup.get<const BasicBlock *>()];
   for (SEHUnwindMapEntry &UME : EHInfo.SEHUnwindMap) {
     const BasicBlock *BB = UME.Handler.get<const BasicBlock *>();
     UME.Handler = MBBMap[BB];
   }
-
-  // If there's an explicit EH registration node on the stack, record its
-  // frame index.
-  if (EHInfo.EHRegNode && EHInfo.EHRegNode->getParent()->getParent() == Fn) {
-    assert(StaticAllocaMap.count(EHInfo.EHRegNode));
-    EHInfo.EHRegNodeFrameIndex = StaticAllocaMap[EHInfo.EHRegNode];
-  }
-
-  // Copy the state numbers to LandingPadInfo for the current function, which
-  // could be a handler or the parent. This should happen for 32-bit SEH and
-  // C++ EH.
-  if (Personality == EHPersonality::MSVC_CXX ||
-      Personality == EHPersonality::MSVC_X86SEH) {
-    for (const LandingPadInst *LP : LPads) {
-      MachineBasicBlock *LPadMBB = MBBMap[LP->getParent()];
-      MMI.addWinEHState(LPadMBB, EHInfo.EHPadStateMap[LP]);
-    }
-  }
-}
-
-void FunctionLoweringInfo::addSEHHandlersForLPads(
-    ArrayRef<const LandingPadInst *> LPads) {
-  MachineModuleInfo &MMI = MF->getMMI();
-
-  // Iterate over all landing pads with llvm.eh.actions calls.
-  for (const LandingPadInst *LP : LPads) {
-    const IntrinsicInst *ActionsCall =
-        dyn_cast<IntrinsicInst>(LP->getNextNode());
-    if (!ActionsCall ||
-        ActionsCall->getIntrinsicID() != Intrinsic::eh_actions)
-      continue;
-
-    // Parse the llvm.eh.actions call we found.
-    MachineBasicBlock *LPadMBB = MBBMap[LP->getParent()];
-    SmallVector<std::unique_ptr<ActionHandler>, 4> Actions;
-    parseEHActions(ActionsCall, Actions);
-
-    // Iterate EH actions from most to least precedence, which means
-    // iterating in reverse.
-    for (auto I = Actions.rbegin(), E = Actions.rend(); I != E; ++I) {
-      ActionHandler *Action = I->get();
-      if (auto *CH = dyn_cast<CatchHandler>(Action)) {
-        const auto *Filter =
-            dyn_cast<Function>(CH->getSelector()->stripPointerCasts());
-        assert((Filter || CH->getSelector()->isNullValue()) &&
-               "expected function or catch-all");
-        const auto *RecoverBA =
-            cast<BlockAddress>(CH->getHandlerBlockOrFunc());
-        MMI.addSEHCatchHandler(LPadMBB, Filter, RecoverBA);
-      } else {
-        assert(isa<CleanupHandler>(Action));
-        const auto *Fini = cast<Function>(Action->getHandlerBlockOrFunc());
-        MMI.addSEHCleanupHandler(LPadMBB, Fini);
-      }
-    }
+  for (ClrEHUnwindMapEntry &CME : EHInfo.ClrEHUnwindMap) {
+    const BasicBlock *BB = CME.Handler.get<const BasicBlock *>();
+    CME.Handler = MBBMap[BB];
   }
 }
 
@@ -376,23 +347,16 @@ void FunctionLoweringInfo::addSEHHandlersForLPads(
 /// FunctionLoweringInfo to an empty state, ready to be used for a
 /// different function.
 void FunctionLoweringInfo::clear() {
-  assert(CatchInfoFound.size() == CatchInfoLost.size() &&
-         "Not all catch info was assigned to a landing pad!");
-
   MBBMap.clear();
   ValueMap.clear();
   StaticAllocaMap.clear();
-#ifndef NDEBUG
-  CatchInfoLost.clear();
-  CatchInfoFound.clear();
-#endif
   LiveOutRegInfo.clear();
   VisitedBBs.clear();
   ArgDbgValues.clear();
   ByValArgFrameIndexMap.clear();
   RegFixups.clear();
   StatepointStackSlots.clear();
-  StatepointRelocatedValues.clear();
+  StatepointSpillMaps.clear();
   PreferredExtendType.clear();
 }
 
@@ -566,6 +530,17 @@ int FunctionLoweringInfo::getArgumentFrameIndex(const Argument *A) {
   return 0;
 }
 
+unsigned FunctionLoweringInfo::getCatchPadExceptionPointerVReg(
+    const Value *CPI, const TargetRegisterClass *RC) {
+  MachineRegisterInfo &MRI = MF->getRegInfo();
+  auto I = CatchPadExceptionPointers.insert({CPI, 0});
+  unsigned &VReg = I.first->second;
+  if (I.second)
+    VReg = MRI.createVirtualRegister(RC);
+  assert(VReg && "null vreg in exception pointer table!");
+  return VReg;
+}
+
 /// ComputeUsesVAFloatArgument - Determine if any floating-point values are
 /// being passed to this variadic function, and set the MachineModuleInfo's
 /// usesVAFloatArgument flag if so. This flag is used to emit an undefined
@@ -619,4 +594,22 @@ void llvm::AddLandingPadInfo(const LandingPadInst &I, MachineModuleInfo &MMI,
       MMI.addFilterTypeInfo(MBB, FilterList);
     }
   }
+}
+
+unsigned FunctionLoweringInfo::findSwiftErrorVReg(const MachineBasicBlock *MBB,
+                                                  const Value* Val) const {
+  // Find the index in SwiftErrorVals.
+  SwiftErrorValues::const_iterator I =
+      std::find(SwiftErrorVals.begin(), SwiftErrorVals.end(), Val);
+  assert(I != SwiftErrorVals.end() && "Can't find value in SwiftErrorVals");
+  return SwiftErrorMap.lookup(MBB)[I - SwiftErrorVals.begin()];
+}
+
+void FunctionLoweringInfo::setSwiftErrorVReg(const MachineBasicBlock *MBB,
+                                             const Value* Val, unsigned VReg) {
+  // Find the index in SwiftErrorVals.
+  SwiftErrorValues::iterator I =
+      std::find(SwiftErrorVals.begin(), SwiftErrorVals.end(), Val);
+  assert(I != SwiftErrorVals.end() && "Can't find value in SwiftErrorVals");
+  SwiftErrorMap[MBB][I - SwiftErrorVals.begin()] = VReg;
 }

@@ -19,12 +19,9 @@
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
 #include "llvm/CodeGen/PseudoSourceValue.h"
-#include "llvm/IR/ValueMap.h"
 #include "llvm/Target/TargetFrameLowering.h"
 #include "llvm/Target/TargetMachine.h"
 #include <map>
-#include <string>
-#include <utility>
 
 namespace llvm {
 
@@ -33,8 +30,8 @@ namespace llvm {
 class MipsFunctionInfo : public MachineFunctionInfo {
 public:
   MipsFunctionInfo(MachineFunction &MF)
-      : MF(MF), SRetReturnReg(0), GlobalBaseReg(0), Mips16SPAliasReg(0),
-        VarArgsFrameIndex(0), CallsEhReturn(false), SaveS2(false),
+      : MF(MF), SRetReturnReg(0), GlobalBaseReg(0), VarArgsFrameIndex(0),
+        CallsEhReturn(false), IsISR(false), SaveS2(false),
         MoveF64ViaSpillFI(-1) {}
 
   ~MipsFunctionInfo();
@@ -44,9 +41,6 @@ public:
 
   bool globalBaseRegSet() const;
   unsigned getGlobalBaseReg();
-
-  bool mips16SPAliasRegSet() const;
-  unsigned getMips16SPAliasReg();
 
   int getVarArgsFrameIndex() const { return VarArgsFrameIndex; }
   void setVarArgsFrameIndex(int Index) { VarArgsFrameIndex = Index; }
@@ -69,6 +63,14 @@ public:
   /// Create a MachinePointerInfo that has an ExternalSymbolPseudoSourceValue
   /// object representing a GOT entry for an external function.
   MachinePointerInfo callPtrInfo(const char *ES);
+
+  // Functions with the "interrupt" attribute require special prologues,
+  // epilogues and additional spill slots.
+  bool isISR() const { return IsISR; }
+  void setISR() { IsISR = true; }
+  void createISRRegFI();
+  int getISRRegFI(unsigned Reg) const { return ISRDataRegFI[Reg]; }
+  bool isISRRegFI(int FI) const;
 
   /// Create a MachinePointerInfo that has a GlobalValuePseudoSourceValue object
   /// representing a GOT entry for a global function.
@@ -96,11 +98,6 @@ private:
   /// relocation models.
   unsigned GlobalBaseReg;
 
-  /// Mips16SPAliasReg - keeps track of the virtual register initialized for
-  /// use as an alias for SP for use in load/store of halfword/byte from/to
-  /// the stack
-  unsigned Mips16SPAliasReg;
-
   /// VarArgsFrameIndex - FrameIndex for start of varargs area.
   int VarArgsFrameIndex;
 
@@ -115,6 +112,12 @@ private:
 
   /// Frame objects for spilling eh data registers.
   int EhDataRegFI[4];
+
+  /// ISR - Whether the function is an Interrupt Service Routine.
+  bool IsISR;
+
+  /// Frame objects for spilling C0_STATUS, C0_EPC
+  int ISRDataRegFI[2];
 
   // saveS2
   bool SaveS2;

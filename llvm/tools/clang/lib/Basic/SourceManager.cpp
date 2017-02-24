@@ -279,9 +279,7 @@ void LineTableInfo::AddEntry(FileID FID,
 /// getLineTableFilenameID - Return the uniqued ID for the specified filename.
 ///
 unsigned SourceManager::getLineTableFilenameID(StringRef Name) {
-  if (!LineTable)
-    LineTable = new LineTableInfo();
-  return LineTable->getLineTableFilenameID(Name);
+  return getLineTable().getLineTableFilenameID(Name);
 }
 
 
@@ -302,9 +300,7 @@ void SourceManager::AddLineNote(SourceLocation Loc, unsigned LineNo,
   // Remember that this file has #line directives now if it doesn't already.
   const_cast<SrcMgr::FileInfo&>(FileInfo).setHasLineDirectives();
 
-  if (!LineTable)
-    LineTable = new LineTableInfo();
-  LineTable->AddLineNote(LocInfo.first, LocInfo.second, LineNo, FilenameID);
+  getLineTable().AddLineNote(LocInfo.first, LocInfo.second, LineNo, FilenameID);
 }
 
 /// AddLineNote - Add a GNU line marker to the line table.
@@ -332,8 +328,7 @@ void SourceManager::AddLineNote(SourceLocation Loc, unsigned LineNo,
   // Remember that this file has #line directives now if it doesn't already.
   const_cast<SrcMgr::FileInfo&>(FileInfo).setHasLineDirectives();
 
-  if (!LineTable)
-    LineTable = new LineTableInfo();
+  (void) getLineTable();
 
   SrcMgr::CharacteristicKind FileKind;
   if (IsExternCHeader)
@@ -366,7 +361,7 @@ LineTableInfo &SourceManager::getLineTable() {
 SourceManager::SourceManager(DiagnosticsEngine &Diag, FileManager &FileMgr,
                              bool UserFilesAreVolatile)
   : Diag(Diag), FileMgr(FileMgr), OverridenFilesKeepOriginalName(true),
-    UserFilesAreVolatile(UserFilesAreVolatile),
+    UserFilesAreVolatile(UserFilesAreVolatile), FilesAreTransient(false),
     ExternalSLocEntries(nullptr), LineTable(nullptr), NumLinearScans(0),
     NumBinaryProbes(0) {
   clearIDTables();
@@ -444,6 +439,7 @@ SourceManager::getOrCreateContentCache(const FileEntry *FileEnt,
   }
 
   Entry->IsSystemFile = isSystemFile;
+  Entry->IsTransient = FilesAreTransient;
 
   return Entry;
 }
@@ -678,11 +674,9 @@ void SourceManager::disableFileContentsOverride(const FileEntry *File) {
   OverriddenFilesInfo->OverriddenFilesWithBuffer.erase(File);
 }
 
-void SourceManager::embedFileContentsInModule(const FileEntry *File) {
-  // We model an embedded file as a file whose buffer has been overridden
-  // by its contents as they are now.
+void SourceManager::setFileIsTransient(const FileEntry *File) {
   const SrcMgr::ContentCache *CC = getOrCreateContentCache(File);
-  const_cast<SrcMgr::ContentCache *>(CC)->BufferOverridden = true;
+  const_cast<SrcMgr::ContentCache *>(CC)->IsTransient = true;
 }
 
 StringRef SourceManager::getBufferData(FileID FID, bool *Invalid) const {
@@ -1166,7 +1160,8 @@ unsigned SourceManager::getColumnNumber(FileID FID, unsigned FilePos,
 
 // isInvalid - Return the result of calling loc.isInvalid(), and
 // if Invalid is not null, set its value to same.
-static bool isInvalid(SourceLocation Loc, bool *Invalid) {
+template<typename LocType>
+static bool isInvalid(LocType Loc, bool *Invalid) {
   bool MyInvalid = Loc.isInvalid();
   if (Invalid)
     *Invalid = MyInvalid;
@@ -1189,8 +1184,9 @@ unsigned SourceManager::getExpansionColumnNumber(SourceLocation Loc,
 
 unsigned SourceManager::getPresumedColumnNumber(SourceLocation Loc,
                                                 bool *Invalid) const {
-  if (isInvalid(Loc, Invalid)) return 0;
-  return getPresumedLoc(Loc).getColumn();
+  PresumedLoc PLoc = getPresumedLoc(Loc);
+  if (isInvalid(PLoc, Invalid)) return 0;
+  return PLoc.getColumn();
 }
 
 #ifdef __SSE2__
@@ -1264,15 +1260,19 @@ FoundSpecialChar:
 
     if (Buf[0] == '\n' || Buf[0] == '\r') {
       // If this is \n\r or \r\n, skip both characters.
-      if ((Buf[1] == '\n' || Buf[1] == '\r') && Buf[0] != Buf[1])
-        ++Offs, ++Buf;
-      ++Offs, ++Buf;
+      if ((Buf[1] == '\n' || Buf[1] == '\r') && Buf[0] != Buf[1]) {
+        ++Offs;
+        ++Buf;
+      }
+      ++Offs;
+      ++Buf;
       LineOffsets.push_back(Offs);
     } else {
       // Otherwise, this is a null.  If end of file, exit.
       if (Buf == End) break;
       // Otherwise, skip the null.
-      ++Offs, ++Buf;
+      ++Offs;
+      ++Buf;
     }
   }
 
@@ -1394,8 +1394,9 @@ unsigned SourceManager::getExpansionLineNumber(SourceLocation Loc,
 }
 unsigned SourceManager::getPresumedLineNumber(SourceLocation Loc,
                                               bool *Invalid) const {
-  if (isInvalid(Loc, Invalid)) return 0;
-  return getPresumedLoc(Loc).getLine();
+  PresumedLoc PLoc = getPresumedLoc(Loc);
+  if (isInvalid(PLoc, Invalid)) return 0;
+  return PLoc.getLine();
 }
 
 /// getFileCharacteristic - return the file characteristic of the specified
@@ -1408,7 +1409,7 @@ unsigned SourceManager::getPresumedLineNumber(SourceLocation Loc,
 /// considered to be from a system header.
 SrcMgr::CharacteristicKind
 SourceManager::getFileCharacteristic(SourceLocation Loc) const {
-  assert(!Loc.isInvalid() && "Can't get file characteristic of invalid loc!");
+  assert(Loc.isValid() && "Can't get file characteristic of invalid loc!");
   std::pair<FileID, unsigned> LocInfo = getDecomposedExpansionLoc(Loc);
   bool Invalid = false;
   const SLocEntry &SEntry = getSLocEntry(LocInfo.first, &Invalid);
@@ -1613,7 +1614,7 @@ FileID SourceManager::translateFile(const FileEntry *SourceFile) const {
   // location in the main file.
   Optional<llvm::sys::fs::UniqueID> SourceFileUID;
   Optional<StringRef> SourceFileName;
-  if (!MainFileID.isInvalid()) {
+  if (MainFileID.isValid()) {
     bool Invalid = false;
     const SLocEntry &MainSLoc = getSLocEntry(MainFileID, &Invalid);
     if (Invalid)
@@ -1723,7 +1724,7 @@ SourceLocation SourceManager::translateLineCol(FileID FID,
                                                unsigned Col) const {
   // Lines are used as a one-based index into a zero-based array. This assert
   // checks for possible buffer underruns.
-  assert(Line != 0 && "Passed a zero-based line");
+  assert(Line && Col && "Line and column should start from 1!");
 
   if (FID.isInvalid())
     return SourceLocation();
@@ -1786,7 +1787,7 @@ SourceLocation SourceManager::translateLineCol(FileID FID,
 ///     110 -> SourceLocation()
 void SourceManager::computeMacroArgsCache(MacroArgsMap *&CachePtr,
                                           FileID FID) const {
-  assert(!FID.isInvalid());
+  assert(FID.isValid());
   assert(!CachePtr);
 
   CachePtr = new MacroArgsMap();
@@ -2095,10 +2096,10 @@ bool SourceManager::isBeforeInTranslationUnit(SourceLocation LHS,
 
   // Clear the lookup cache, it depends on a common location.
   IsBeforeInTUCache.clear();
-  llvm::MemoryBuffer *LBuf = getBuffer(LOffs.first);
-  llvm::MemoryBuffer *RBuf = getBuffer(ROffs.first);
-  bool LIsBuiltins = strcmp("<built-in>", LBuf->getBufferIdentifier()) == 0;
-  bool RIsBuiltins = strcmp("<built-in>", RBuf->getBufferIdentifier()) == 0;
+  const char *LB = getBuffer(LOffs.first)->getBufferIdentifier();
+  const char *RB = getBuffer(ROffs.first)->getBufferIdentifier();
+  bool LIsBuiltins = strcmp("<built-in>", LB) == 0;
+  bool RIsBuiltins = strcmp("<built-in>", RB) == 0;
   // Sort built-in before non-built-in.
   if (LIsBuiltins || RIsBuiltins) {
     if (LIsBuiltins != RIsBuiltins)
@@ -2107,14 +2108,22 @@ bool SourceManager::isBeforeInTranslationUnit(SourceLocation LHS,
     // lower IDs come first.
     return LOffs.first < ROffs.first;
   }
-  bool LIsAsm = strcmp("<inline asm>", LBuf->getBufferIdentifier()) == 0;
-  bool RIsAsm = strcmp("<inline asm>", RBuf->getBufferIdentifier()) == 0;
+  bool LIsAsm = strcmp("<inline asm>", LB) == 0;
+  bool RIsAsm = strcmp("<inline asm>", RB) == 0;
   // Sort assembler after built-ins, but before the rest.
   if (LIsAsm || RIsAsm) {
     if (LIsAsm != RIsAsm)
       return RIsAsm;
     assert(LOffs.first == ROffs.first);
     return false;
+  }
+  bool LIsScratch = strcmp("<scratch space>", LB) == 0;
+  bool RIsScratch = strcmp("<scratch space>", RB) == 0;
+  // Sort scratch after inline asm, but before the rest.
+  if (LIsScratch || RIsScratch) {
+    if (LIsScratch != RIsScratch)
+      return LIsScratch;
+    return LOffs.second < ROffs.second;
   }
   llvm_unreachable("Unsortable locations found");
 }

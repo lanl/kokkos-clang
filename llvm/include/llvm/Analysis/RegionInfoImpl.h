@@ -18,7 +18,6 @@
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/Analysis/RegionInfo.h"
 #include "llvm/Analysis/RegionIterator.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <algorithm>
@@ -444,16 +443,14 @@ typename Tr::RegionT *RegionBase<Tr>::getExpandedRegion() const {
   if (NumSuccessors == 0)
     return nullptr;
 
-  for (PredIterTy PI = InvBlockTraits::child_begin(getExit()),
-                  PE = InvBlockTraits::child_end(getExit());
-       PI != PE; ++PI) {
-    if (!DT->dominates(getEntry(), *PI))
-      return nullptr;
-  }
-
   RegionT *R = RI->getRegionFor(exit);
 
   if (R->getEntry() != exit) {
+    for (PredIterTy PI = InvBlockTraits::child_begin(getExit()),
+                    PE = InvBlockTraits::child_end(getExit());
+         PI != PE; ++PI)
+      if (!contains(*PI))
+        return nullptr;
     if (Tr::getNumSuccessors(exit) == 1)
       return new RegionT(getEntry(), *BlockTraits::child_begin(exit), RI, DT);
     return nullptr;
@@ -462,13 +459,11 @@ typename Tr::RegionT *RegionBase<Tr>::getExpandedRegion() const {
   while (R->getParent() && R->getParent()->getEntry() == exit)
     R = R->getParent();
 
-  if (!DT->dominates(getEntry(), R->getExit())) {
-    for (PredIterTy PI = InvBlockTraits::child_begin(getExit()),
-                    PE = InvBlockTraits::child_end(getExit());
-         PI != PE; ++PI) {
-      if (!DT->dominates(R->getExit(), *PI))
-        return nullptr;
-    }
+  for (PredIterTy PI = InvBlockTraits::child_begin(getExit()),
+                  PE = InvBlockTraits::child_end(getExit());
+       PI != PE; ++PI) {
+    if (!(contains(*PI) || R->contains(*PI)))
+      return nullptr;
   }
 
   return new RegionT(getEntry(), R->getExit(), RI, DT);
@@ -670,7 +665,7 @@ typename Tr::RegionT *RegionInfoBase<Tr>::createRegion(BlockT *entry,
       new RegionT(entry, exit, static_cast<RegionInfoT *>(this), DT);
   BBtoRegion.insert(std::make_pair(entry, region));
 
-#ifdef XDEBUG
+#ifdef EXPENSIVE_CHECKS
   region->verifyRegion();
 #else
   DEBUG(region->verifyRegion());
@@ -769,7 +764,7 @@ void RegionInfoBase<Tr>::buildRegionsTree(DomTreeNodeT *N, RegionT *region) {
   }
 }
 
-#ifdef XDEBUG
+#ifdef EXPENSIVE_CHECKS
 template <class Tr>
 bool RegionInfoBase<Tr>::VerifyRegionInfo = true;
 #else
@@ -803,7 +798,7 @@ void RegionInfoBase<Tr>::releaseMemory() {
 
 template <class Tr>
 void RegionInfoBase<Tr>::verifyAnalysis() const {
-  // Do only verify regions if explicitely activated using XDEBUG or
+  // Do only verify regions if explicitely activated using EXPENSIVE_CHECKS or
   // -verify-region-info
   if (!RegionInfoBase<Tr>::VerifyRegionInfo)
     return;

@@ -19,9 +19,10 @@ int main (int argc, char **argv) {
 {
 #pragma omp cancel sections
 }
-// CHECK: call i32 @__kmpc_single(
-// CHECK-NOT: @__kmpc_cancel
-// CHECK: call void @__kmpc_end_single(
+// CHECK: call void @__kmpc_for_static_init_4(
+// CHECK: call i32 @__kmpc_cancel(
+// CHECK: call i32 @__kmpc_cancel_barrier(%ident_t*
+// CHECK: call void @__kmpc_for_static_fini(
 // CHECK: call void @__kmpc_barrier(%ident_t*
 #pragma omp sections
 {
@@ -90,9 +91,11 @@ for (int i = 0; i < argc; ++i) {
   }
 }
 // CHECK: call void (%ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(
-#pragma omp parallel for
+int r = 0;
+#pragma omp parallel for reduction(+: r)
 for (int i = 0; i < argc; ++i) {
 #pragma omp cancel for
+  r += i;
 }
 // CHECK: call void (%ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(
   return argc;
@@ -111,7 +114,6 @@ for (int i = 0; i < argc; ++i) {
 // CHECK: br label %[[RETURN:.+]]
 // CHECK: [[ELSE]]
 // CHECK: br label
-// CHECK: call void @__kmpc_barrier
 // CHECK: [[RETURN]]
 // CHECK: ret void
 
@@ -126,10 +128,10 @@ for (int i = 0; i < argc; ++i) {
 // CHECK: ret i32 0
 
 // CHECK: define internal void @{{[^(]+}}(i32* {{[^,]+}}, i32* {{[^,]+}})
-// CHECK: call i32 @__kmpc_single(
-// CHECK-NOT: @__kmpc_cancel
-// CHECK: call void @__kmpc_end_single(
-// CHECK: call void @__kmpc_barrier(%ident_t*
+// CHECK: call void @__kmpc_for_static_init_4(
+// CHECK: call i32 @__kmpc_cancel(
+// CHECK: call i32 @__kmpc_cancel_barrier(%ident_t*
+// CHECK: call void @__kmpc_for_static_fini(
 // CHECK: ret void
 
 // CHECK: define internal void @{{[^(]+}}(i32* {{[^,]+}}, i32* {{[^,]+}})
@@ -164,7 +166,9 @@ for (int i = 0; i < argc; ++i) {
 // CHECK: [[CONTINUE]]
 // CHECK: br label
 // CHECK: call void @__kmpc_for_static_fini(
-// CHECK: call void @__kmpc_barrier(%ident_t*
+// CHECK: call i32 @__kmpc_reduce_nowait(
+// CHECK: call void @__kmpc_end_reduce_nowait(
+// CHECK: call void @__kmpc_for_static_fini(
 // CHECK: ret void
 
 #endif

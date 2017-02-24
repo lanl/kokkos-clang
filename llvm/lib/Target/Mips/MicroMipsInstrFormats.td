@@ -278,7 +278,6 @@ class MOVEP_FM_MM16 {
 
 class MMArch {
   string Arch = "micromips";
-  list<dag> Pattern = [];
 }
 
 class ADD_FM_MM<bits<6> op, bits<10> funct> : MMArch {
@@ -380,13 +379,15 @@ class SRLV_FM_MM<bits<10> funct, bit rotate> : MMArch {
 class LW_FM_MM<bits<6> op> : MMArch {
   bits<5> rt;
   bits<21> addr;
+  bits<5> base = addr{20-16};
+  bits<16> offset = addr{15-0};
 
   bits<32> Inst;
 
   let Inst{31-26} = op;
   let Inst{25-21} = rt;
-  let Inst{20-16} = addr{20-16};
-  let Inst{15-0}  = addr{15-0};
+  let Inst{20-16} = base;
+  let Inst{15-0}  = offset;
 }
 
 class POOL32C_LHUE_FM_MM<bits<6> op, bits<4> fmt, bits<3> funct> : MMArch {
@@ -416,6 +417,22 @@ class LWL_FM_MM<bits<4> funct> {
   let Inst{20-16} = addr{20-16};
   let Inst{15-12} = funct;
   let Inst{11-0}  = addr{11-0};
+}
+
+class POOL32C_STEVA_LDEVA_FM_MM<bits<4> type, bits<3> funct> {
+  bits<5> rt;
+  bits<21> addr;
+  bits<5> base = addr{20-16};
+  bits<9> offset = addr{8-0};
+
+  bits<32> Inst;
+
+  let Inst{31-26} = 0x18;
+  let Inst{25-21} = rt;
+  let Inst{20-16} = base;
+  let Inst{15-12} = type;
+  let Inst{11-9} = funct;
+  let Inst{8-0}  = offset;
 }
 
 class CMov_F_I_FM_MM<bits<7> func> : MMArch {
@@ -658,7 +675,7 @@ class TEQI_FM_MM<bits<5> funct> : MMArch {
   let Inst{15-0}  = imm16;
 }
 
-class LL_FM_MM<bits<4> funct> {
+class LL_FM_MM<bits<4> funct> : MMArch {
   bits<5> rt;
   bits<21> addr;
 
@@ -669,6 +686,22 @@ class LL_FM_MM<bits<4> funct> {
   let Inst{20-16} = addr{20-16};
   let Inst{15-12} = funct;
   let Inst{11-0}  = addr{11-0};
+}
+
+class LLE_FM_MM<bits<4> funct> {
+  bits<5> rt;
+  bits<21> addr;
+  bits<5> base = addr{20-16};
+  bits<9> offset = addr{8-0};
+
+  bits<32> Inst;
+
+  let Inst{31-26} = 0x18;
+  let Inst{25-21} = rt;
+  let Inst{20-16} = base;
+  let Inst{15-12} = funct;
+  let Inst{11-9} = 0x6;
+  let Inst{8-0} = offset;
 }
 
 class ADDS_FM_MM<bits<2> fmt, bits<8> funct> : MMArch {
@@ -911,7 +944,7 @@ class LWM_FM_MM<bits<4> funct> : MMArch {
   let Inst{11-0}  = addr{11-0};
 }
 
-class LWM_FM_MM16<bits<4> funct> : MMArch {
+class LWM_FM_MM16<bits<4> funct> : MMArch, PredicateControl {
   bits<2> rt;
   bits<4> addr;
 

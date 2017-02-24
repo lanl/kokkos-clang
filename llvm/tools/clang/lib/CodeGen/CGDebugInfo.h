@@ -16,6 +16,7 @@
 
 #include "CGBuilder.h"
 #include "clang/AST/Expr.h"
+#include "clang/AST/ExternalASTSource.h"
 #include "clang/AST/Type.h"
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Frontend/CodeGenOptions.h"
@@ -52,28 +53,20 @@ class CGDebugInfo {
   friend class ApplyDebugLocation;
   friend class SaveAndRestoreLocation;
   CodeGenModule &CGM;
-  const CodeGenOptions::DebugInfoKind DebugKind;
+  const codegenoptions::DebugInfoKind DebugKind;
   bool DebugTypeExtRefs;
   llvm::DIBuilder DBuilder;
   llvm::DICompileUnit *TheCU = nullptr;
   ModuleMap *ClangModuleMap = nullptr;
+  ExternalASTSource::ASTSourceDescriptor PCHDescriptor;
   SourceLocation CurLoc;
   llvm::DIType *VTablePtrType = nullptr;
   llvm::DIType *ClassTy = nullptr;
   llvm::DICompositeType *ObjTy = nullptr;
   llvm::DIType *SelTy = nullptr;
-  llvm::DIType *OCLImage1dDITy = nullptr;
-  llvm::DIType *OCLImage1dArrayDITy = nullptr;
-  llvm::DIType *OCLImage1dBufferDITy = nullptr;
-  llvm::DIType *OCLImage2dDITy = nullptr;
-  llvm::DIType *OCLImage2dArrayDITy = nullptr;
-  llvm::DIType *OCLImage2dDepthDITy = nullptr;
-  llvm::DIType *OCLImage2dArrayDepthDITy = nullptr;
-  llvm::DIType *OCLImage2dMSAADITy = nullptr;
-  llvm::DIType *OCLImage2dArrayMSAADITy = nullptr;
-  llvm::DIType *OCLImage2dMSAADepthDITy = nullptr;
-  llvm::DIType *OCLImage2dArrayMSAADepthDITy = nullptr;
-  llvm::DIType *OCLImage3dDITy = nullptr;
+#define IMAGE_TYPE(ImgType, Id, SingletonId, Access, Suffix) \
+  llvm::DIType *SingletonId = nullptr;
+#include "clang/Basic/OpenCLImageTypes.def"
   llvm::DIType *OCLEventDITy = nullptr;
   llvm::DIType *OCLClkEventDITy = nullptr;
   llvm::DIType *OCLQueueDITy = nullptr;
@@ -82,6 +75,8 @@ class CGDebugInfo {
 
   /// Cache of previously constructed Types.
   llvm::DenseMap<const void *, llvm::TrackingMDRef> TypeCache;
+
+  llvm::SmallDenseMap<llvm::StringRef, llvm::StringRef> DebugPrefixMap;
 
   struct ObjCInterfaceCacheEntry {
     const ObjCInterfaceType *Type;
@@ -105,7 +100,7 @@ class CGDebugInfo {
   /// compilation.
   std::vector<std::pair<const TagType *, llvm::TrackingMDRef>> ReplaceMap;
 
-  /// Cache of replaceable forward declarartions (functions and
+  /// Cache of replaceable forward declarations (functions and
   /// variables) to RAUW at the end of compilation.
   std::vector<std::pair<const DeclaratorDecl *, llvm::TrackingMDRef>>
       FwdDeclReplaceMap;
@@ -138,7 +133,6 @@ class CGDebugInfo {
   /// @{
   /// Currently the checksum of an interface includes the number of
   /// ivars and property accessors.
-  unsigned Checksum(const ObjCInterfaceDecl *InterfaceDecl);
   llvm::DIType *CreateType(const BuiltinType *Ty);
   llvm::DIType *CreateType(const ComplexType *Ty);
   llvm::DIType *CreateQualifiedType(QualType Ty, llvm::DIFile *Fg);
@@ -167,6 +161,7 @@ class CGDebugInfo {
   llvm::DIType *CreateType(const RValueReferenceType *Ty, llvm::DIFile *Unit);
   llvm::DIType *CreateType(const MemberPointerType *Ty, llvm::DIFile *F);
   llvm::DIType *CreateType(const AtomicType *Ty, llvm::DIFile *F);
+  llvm::DIType *CreateType(const PipeType *Ty, llvm::DIFile *F);
   /// Get enumeration type.
   llvm::DIType *CreateEnumType(const EnumType *Ty);
   llvm::DIType *CreateTypeDefinition(const EnumType *Ty);
@@ -197,11 +192,8 @@ class CGDebugInfo {
   llvm::DIType *getOrCreateVTablePtrType(llvm::DIFile *F);
   /// \return namespace descriptor for the given namespace decl.
   llvm::DINamespace *getOrCreateNameSpace(const NamespaceDecl *N);
-  llvm::DIType *getOrCreateTypeDeclaration(QualType PointeeTy, llvm::DIFile *F);
   llvm::DIType *CreatePointerLikeType(llvm::dwarf::Tag Tag, const Type *Ty,
                                       QualType PointeeTy, llvm::DIFile *F);
-
-  llvm::Value *getCachedInterfaceTypeOrNull(const QualType Ty);
   llvm::DIType *getOrCreateStructPtrType(StringRef Name, llvm::DIType *&Cache);
 
   /// A helper function to create a subprogram for a single member
@@ -240,10 +232,15 @@ class CGDebugInfo {
                            llvm::DIFile *F);
 
   llvm::DIType *createFieldType(StringRef name, QualType type,
-                                uint64_t sizeInBitsOverride, SourceLocation loc,
-                                AccessSpecifier AS, uint64_t offsetInBits,
-                                llvm::DIFile *tunit, llvm::DIScope *scope,
+                                SourceLocation loc, AccessSpecifier AS,
+                                uint64_t offsetInBits, llvm::DIFile *tunit,
+                                llvm::DIScope *scope,
                                 const RecordDecl *RD = nullptr);
+
+  /// Create new bit field member.
+  llvm::DIType *createBitFieldType(const FieldDecl *BitFieldDecl,
+                                   llvm::DIScope *RecordTy,
+                                   const RecordDecl *RD);
 
   /// Helpers for collecting fields of a record.
   /// @{
@@ -276,6 +273,8 @@ public:
 
   void finalize();
 
+  /// Module debugging: Support for building PCMs.
+  /// @{
   /// Set the main CU's DwoId field to \p Signature.
   void setDwoId(uint64_t Signature);
 
@@ -283,6 +282,14 @@ public:
   /// precompiled header, this module map will be used to determine
   /// the module of origin of each Decl.
   void setModuleMap(ModuleMap &MMap) { ClangModuleMap = &MMap; }
+
+  /// When generating debug information for a clang module or
+  /// precompiled header, this module map will be used to determine
+  /// the module of origin of each Decl.
+  void setPCHDescriptor(ExternalASTSource::ASTSourceDescriptor PCH) {
+    PCHDescriptor = PCH;
+  }
+  /// @}
 
   /// Update the current source location. If \arg loc is invalid it is
   /// ignored.
@@ -326,7 +333,7 @@ public:
                                          llvm::Value *storage,
                                          CGBuilderTy &Builder,
                                          const CGBlockInfo &blockInfo,
-                                         llvm::Instruction *InsertPoint = 0);
+                                         llvm::Instruction *InsertPoint = nullptr);
 
   /// Emit call to \c llvm.dbg.declare for an argument variable
   /// declaration.
@@ -404,6 +411,9 @@ private:
   /// Create new compile unit.
   void CreateCompileUnit();
 
+  /// Remap a given path with the current debug prefix map
+  std::string remapDIPath(StringRef) const;
+
   /// Get the file debug info descriptor for the input location.
   llvm::DIFile *getOrCreateFile(SourceLocation Loc);
 
@@ -429,10 +439,6 @@ private:
 
   /// Create type metadata for a source language type.
   llvm::DIType *CreateTypeNode(QualType Ty, llvm::DIFile *Fg);
-
-  /// Return the underlying ObjCInterfaceDecl if \arg Ty is an
-  /// ObjCInterface or a pointer to one.
-  ObjCInterfaceDecl *getObjCInterfaceDecl(QualType Ty);
 
   /// Create new member and increase Offset by FType's size.
   llvm::DIType *CreateMemberType(llvm::DIFile *Unit, QualType FType,
@@ -577,20 +583,14 @@ public:
   /// passing an empty SourceLocation to \a CGDebugInfo::setLocation()
   /// will result in the last valid location being reused.  Note that
   /// all instructions that do not have a location at the beginning of
-  /// a function are counted towards to funciton prologue.
+  /// a function are counted towards to function prologue.
   static ApplyDebugLocation CreateEmpty(CodeGenFunction &CGF) {
     return ApplyDebugLocation(CGF, true, SourceLocation());
   }
 
-  /// \brief Apply TemporaryLocation if it is valid. Otherwise set the IRBuilder
-  /// to not attach debug locations.
-  static ApplyDebugLocation
-  CreateDefaultEmpty(CodeGenFunction &CGF, SourceLocation TemporaryLocation) {
-    return ApplyDebugLocation(CGF, true, TemporaryLocation);
-  }
 };
 
 } // namespace CodeGen
 } // namespace clang
 
-#endif
+#endif // LLVM_CLANG_LIB_CODEGEN_CGDEBUGINFO_H

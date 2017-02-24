@@ -89,7 +89,7 @@ private:
       BT.reset(new BuiltinBug(this, desc));
   }
   bool uninitRefOrPointer(CheckerContext &C, const SVal &V,
-                          const SourceRange &ArgRange,
+                          SourceRange ArgRange,
                           const Expr *ArgEx, std::unique_ptr<BugType> &BT,
                           const ParmVarDecl *ParamDecl, const char *BD) const;
 };
@@ -138,7 +138,7 @@ static StringRef describeUninitializedArgumentInCall(const CallEvent &Call,
 
 bool CallAndMessageChecker::uninitRefOrPointer(CheckerContext &C,
                                                const SVal &V,
-                                               const SourceRange &ArgRange,
+                                               SourceRange ArgRange,
                                                const Expr *ArgEx,
                                                std::unique_ptr<BugType> &BT,
                                                const ParmVarDecl *ParamDecl,
@@ -313,7 +313,7 @@ void CallAndMessageChecker::checkPreStmt(const CallExpr *CE,
   if (L.isUndef()) {
     if (!BT_call_undef)
       BT_call_undef.reset(new BuiltinBug(
-          this, "Called function pointer is an uninitalized pointer value"));
+          this, "Called function pointer is an uninitialized pointer value"));
     emitBadCall(BT_call_undef.get(), C, Callee);
     return;
   }
@@ -522,7 +522,8 @@ void CallAndMessageChecker::emitNilReceiverBug(CheckerContext &C,
 
 static bool supportsNilWithFloatRet(const llvm::Triple &triple) {
   return (triple.getVendor() == llvm::Triple::Apple &&
-          (triple.isiOS() || !triple.isMacOSXVersionLT(10,5)));
+          (triple.isiOS() || triple.isWatchOS() ||
+           !triple.isMacOSXVersionLT(10,5)));
 }
 
 void CallAndMessageChecker::HandleNilReceiver(CheckerContext &C,

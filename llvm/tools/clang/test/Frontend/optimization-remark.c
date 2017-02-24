@@ -4,7 +4,7 @@
 // optimization level.
 
 // RUN: %clang_cc1 %s -Rpass=inline -Rpass-analysis=inline -Rpass-missed=inline -O0 -emit-llvm-only -verify
-// RUN: %clang_cc1 %s -Rpass=inline -Rpass-analysis=inline -Rpass-missed=inline -O0 -emit-llvm-only -gline-tables-only -verify
+// RUN: %clang_cc1 %s -Rpass=inline -Rpass-analysis=inline -Rpass-missed=inline -O0 -emit-llvm-only -debug-info-kind=line-tables-only -verify
 // RUN: %clang_cc1 %s -Rpass=inline -emit-llvm -o - 2>/dev/null | FileCheck %s
 //
 // Check that we can override -Rpass= with -Rno-pass.
@@ -27,9 +27,10 @@
 // CHECK: , !dbg !
 // CHECK-NOT: DW_TAG_base_type
 
-// But llvm.dbg.cu should be missing (to prevent writing debug info to
+// The CU should be marked NoDebug (to prevent writing debug info to
 // the final output).
-// CHECK-NOT: !llvm.dbg.cu = !{
+// CHECK: !llvm.dbg.cu = !{![[CU:.*]]}
+// CHECK: ![[CU]] = distinct !DICompileUnit({{.*}}emissionKind: NoDebug
 
 int foo(int x, int y) __attribute__((always_inline));
 int foo(int x, int y) { return x + y; }

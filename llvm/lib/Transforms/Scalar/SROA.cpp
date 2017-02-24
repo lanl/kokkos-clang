@@ -55,8 +55,8 @@
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
 
-#if __cplusplus >= 201103L && !defined(NDEBUG)
-// We only use this for a debug check in C++11
+#ifndef NDEBUG
+// We only use this for a debug check.
 #include <random>
 #endif
 
@@ -87,12 +87,13 @@ static cl::opt<bool> SROAStrictInbounds("sroa-strict-inbounds", cl::init(false),
                                         cl::Hidden);
 
 namespace {
-/// \brief A custom IRBuilder inserter which prefixes all names if they are
-/// preserved.
-template <bool preserveNames = true>
-class IRBuilderPrefixedInserter
-    : public IRBuilderDefaultInserter<preserveNames> {
+/// \brief A custom IRBuilder inserter which prefixes all names, but only in
+/// Assert builds.
+class IRBuilderPrefixedInserter : public IRBuilderDefaultInserter {
   std::string Prefix;
+  const Twine getNameWithPrefix(const Twine &Name) const {
+    return Name.isTriviallyEmpty() ? Name : Prefix + Name;
+  }
 
 public:
   void SetNamePrefix(const Twine &P) { Prefix = P.str(); }
@@ -100,27 +101,13 @@ public:
 protected:
   void InsertHelper(Instruction *I, const Twine &Name, BasicBlock *BB,
                     BasicBlock::iterator InsertPt) const {
-    IRBuilderDefaultInserter<preserveNames>::InsertHelper(
-        I, Name.isTriviallyEmpty() ? Name : Prefix + Name, BB, InsertPt);
+    IRBuilderDefaultInserter::InsertHelper(I, getNameWithPrefix(Name), BB,
+                                           InsertPt);
   }
 };
 
-// Specialization for not preserving the name is trivial.
-template <>
-class IRBuilderPrefixedInserter<false>
-    : public IRBuilderDefaultInserter<false> {
-public:
-  void SetNamePrefix(const Twine &P) {}
-};
-
 /// \brief Provide a typedef for IRBuilder that drops names in release builds.
-#ifndef NDEBUG
-typedef llvm::IRBuilder<true, ConstantFolder, IRBuilderPrefixedInserter<true>>
-    IRBuilderTy;
-#else
-typedef llvm::IRBuilder<false, ConstantFolder, IRBuilderPrefixedInserter<false>>
-    IRBuilderTy;
-#endif
+using IRBuilderTy = llvm::IRBuilder<ConstantFolder, IRBuilderPrefixedInserter>;
 }
 
 namespace {
@@ -694,7 +681,7 @@ private:
       // langref in a very strict sense. If we ever want to enable
       // SROAStrictInbounds, this code should be factored cleanly into
       // PtrUseVisitor, but it is easier to experiment with SROAStrictInbounds
-      // by writing out the code here where we have tho underlying allocation
+      // by writing out the code here where we have the underlying allocation
       // size readily available.
       APInt GEPOffset = Offset;
       const DataLayout &DL = GEPI.getModule()->getDataLayout();
@@ -1015,7 +1002,7 @@ AllocaSlices::AllocaSlices(const DataLayout &DL, AllocaInst &AI)
                               }),
                Slices.end());
 
-#if __cplusplus >= 201103L && !defined(NDEBUG)
+#ifndef NDEBUG
   if (SROARandomShuffleSlices) {
     std::mt19937 MT(static_cast<unsigned>(sys::TimeValue::now().msec()));
     std::shuffle(Slices.begin(), Slices.end(), MT);
@@ -1158,7 +1145,7 @@ static bool isSafePHIToSpeculate(PHINode &PN) {
 
     // Ensure that there are no instructions between the PHI and the load that
     // could store.
-    for (BasicBlock::iterator BBI = &PN; &*BBI != LI; ++BBI)
+    for (BasicBlock::iterator BBI(PN); &*BBI != LI; ++BBI)
       if (BBI->mayWriteToMemory())
         return false;
 
@@ -1192,8 +1179,7 @@ static bool isSafePHIToSpeculate(PHINode &PN) {
     // If this pointer is always safe to load, or if we can prove that there
     // is already a load in the block, then we can move the load to the pred
     // block.
-    if (isDereferenceablePointer(InVal, DL) ||
-        isSafeToLoadUnconditionally(InVal, TI, MaxAlign))
+    if (isSafeToLoadUnconditionally(InVal, MaxAlign, DL, TI))
       continue;
 
     return false;
@@ -1262,8 +1248,6 @@ static bool isSafeSelectToSpeculate(SelectInst &SI) {
   Value *TValue = SI.getTrueValue();
   Value *FValue = SI.getFalseValue();
   const DataLayout &DL = SI.getModule()->getDataLayout();
-  bool TDerefable = isDereferenceablePointer(TValue, DL);
-  bool FDerefable = isDereferenceablePointer(FValue, DL);
 
   for (User *U : SI.users()) {
     LoadInst *LI = dyn_cast<LoadInst>(U);
@@ -1273,11 +1257,9 @@ static bool isSafeSelectToSpeculate(SelectInst &SI) {
     // Both operands to the select need to be dereferencable, either
     // absolutely (e.g. allocas) or at this point because we can see other
     // accesses to it.
-    if (!TDerefable &&
-        !isSafeToLoadUnconditionally(TValue, LI, LI->getAlignment()))
+    if (!isSafeToLoadUnconditionally(TValue, LI->getAlignment(), DL, LI))
       return false;
-    if (!FDerefable &&
-        !isSafeToLoadUnconditionally(FValue, LI, LI->getAlignment()))
+    if (!isSafeToLoadUnconditionally(FValue, LI->getAlignment(), DL, LI))
       return false;
   }
 
@@ -1570,7 +1552,7 @@ static Value *getAdjustedPtr(IRBuilderTy &IRB, const DataLayout &DL, Value *Ptr,
     if (Operator::getOpcode(Ptr) == Instruction::BitCast) {
       Ptr = cast<Operator>(Ptr)->getOperand(0);
     } else if (GlobalAlias *GA = dyn_cast<GlobalAlias>(Ptr)) {
-      if (GA->mayBeOverridden())
+      if (GA->isInterposable())
         break;
       Ptr = GA->getAliasee();
     } else {
@@ -1653,8 +1635,10 @@ static bool canConvertValue(const DataLayout &DL, Type *OldTy, Type *NewTy) {
   OldTy = OldTy->getScalarType();
   NewTy = NewTy->getScalarType();
   if (NewTy->isPointerTy() || OldTy->isPointerTy()) {
-    if (NewTy->isPointerTy() && OldTy->isPointerTy())
-      return true;
+    if (NewTy->isPointerTy() && OldTy->isPointerTy()) {
+      return cast<PointerType>(NewTy)->getPointerAddressSpace() ==
+        cast<PointerType>(OldTy)->getPointerAddressSpace();
+    }
     if (NewTy->isIntegerTy() || OldTy->isIntegerTy())
       return true;
     return false;
@@ -2442,7 +2426,7 @@ private:
                  DL.getTypeStoreSizeInBits(LI.getType()) &&
              "Non-byte-multiple bit width");
       // Move the insertion point just past the load so that we can refer to it.
-      IRB.SetInsertPoint(std::next(BasicBlock::iterator(&LI)));
+      IRB.SetInsertPoint(&*std::next(BasicBlock::iterator(&LI)));
       // Create a placeholder value with the same type as LI to use as the
       // basis for the new value. This allows us to replace the uses of LI with
       // the computed value, and then replace the placeholder with LI, leaving
@@ -2920,7 +2904,7 @@ private:
     // dominate the PHI.
     IRBuilderTy PtrBuilder(IRB);
     if (isa<PHINode>(OldPtr))
-      PtrBuilder.SetInsertPoint(OldPtr->getParent()->getFirstInsertionPt());
+      PtrBuilder.SetInsertPoint(&*OldPtr->getParent()->getFirstInsertionPt());
     else
       PtrBuilder.SetInsertPoint(OldPtr);
     PtrBuilder.SetCurrentDebugLocation(OldPtr->getDebugLoc());
@@ -2974,8 +2958,6 @@ class AggLoadStoreRewriter : public InstVisitor<AggLoadStoreRewriter, bool> {
   // Befriend the base class so it can delegate to private visit methods.
   friend class llvm::InstVisitor<AggLoadStoreRewriter, bool>;
 
-  const DataLayout &DL;
-
   /// Queue of pointer uses to analyze and potentially rewrite.
   SmallVector<Use *, 8> Queue;
 
@@ -2987,8 +2969,6 @@ class AggLoadStoreRewriter : public InstVisitor<AggLoadStoreRewriter, bool> {
   Use *U;
 
 public:
-  AggLoadStoreRewriter(const DataLayout &DL) : DL(DL) {}
-
   /// Rewrite loads and stores through a pointer and all pointers derived from
   /// it.
   bool rewrite(Instruction &I) {
@@ -3127,9 +3107,14 @@ private:
     void emitFunc(Type *Ty, Value *&Agg, const Twine &Name) {
       assert(Ty->isSingleValueType());
       // Extract the single value and store it using the indices.
-      Value *Store = IRB.CreateStore(
-          IRB.CreateExtractValue(Agg, Indices, Name + ".extract"),
-          IRB.CreateInBoundsGEP(nullptr, Ptr, GEPIndices, Name + ".gep"));
+      //
+      // The gep and extractvalue values are factored out of the CreateStore
+      // call to make the output independent of the argument evaluation order.
+      Value *ExtractValue =
+          IRB.CreateExtractValue(Agg, Indices, Name + ".extract");
+      Value *InBoundsGEP =
+          IRB.CreateInBoundsGEP(nullptr, Ptr, GEPIndices, Name + ".gep");
+      Value *Store = IRB.CreateStore(ExtractValue, InBoundsGEP);
       (void)Store;
       DEBUG(dbgs() << "          to: " << *Store << "\n");
     }
@@ -3384,11 +3369,15 @@ bool SROA::presplitLoadsAndStores(AllocaInst &AI, AllocaSlices &AS) {
   for (auto &P : AS.partitions()) {
     for (Slice &S : P) {
       Instruction *I = cast<Instruction>(S.getUse()->getUser());
-      if (!S.isSplittable() ||S.endOffset() <= P.endOffset()) {
-        // If this was a load we have to track that it can't participate in any
-        // pre-splitting!
+      if (!S.isSplittable() || S.endOffset() <= P.endOffset()) {
+        // If this is a load we have to track that it can't participate in any
+        // pre-splitting. If this is a store of a load we have to track that
+        // that load also can't participate in any pre-splitting.
         if (auto *LI = dyn_cast<LoadInst>(I))
           UnsplittableLoads.insert(LI);
+        else if (auto *SI = dyn_cast<StoreInst>(I))
+          if (auto *LI = dyn_cast<LoadInst>(SI->getValueOperand()))
+            UnsplittableLoads.insert(LI);
         continue;
       }
       assert(P.endOffset() > S.beginOffset() &&
@@ -3415,9 +3404,9 @@ bool SROA::presplitLoadsAndStores(AllocaInst &AI, AllocaSlices &AS) {
         }
 
         Loads.push_back(LI);
-      } else if (auto *SI = dyn_cast<StoreInst>(S.getUse()->getUser())) {
-        if (!SI ||
-            S.getUse() != &SI->getOperandUse(SI->getPointerOperandIndex()))
+      } else if (auto *SI = dyn_cast<StoreInst>(I)) {
+        if (S.getUse() != &SI->getOperandUse(SI->getPointerOperandIndex()))
+          // Skip stores *of* pointers. FIXME: This shouldn't even be possible!
           continue;
         auto *StoredLoad = dyn_cast<LoadInst>(SI->getValueOperand());
         if (!StoredLoad || !StoredLoad->isSimple())
@@ -3566,7 +3555,7 @@ bool SROA::presplitLoadsAndStores(AllocaInst &AI, AllocaSlices &AS) {
            "Cannot represent alloca access size using 64-bit integers!");
 
     Instruction *BasePtr = cast<Instruction>(LI->getPointerOperand());
-    IRB.SetInsertPoint(BasicBlock::iterator(LI));
+    IRB.SetInsertPoint(LI);
 
     DEBUG(dbgs() << "  Splitting load: " << *LI << "\n");
 
@@ -3618,7 +3607,7 @@ bool SROA::presplitLoadsAndStores(AllocaInst &AI, AllocaSlices &AS) {
       }
 
       Value *StoreBasePtr = SI->getPointerOperand();
-      IRB.SetInsertPoint(BasicBlock::iterator(SI));
+      IRB.SetInsertPoint(SI);
 
       DEBUG(dbgs() << "    Splitting store of load: " << *SI << "\n");
 
@@ -3707,7 +3696,7 @@ bool SROA::presplitLoadsAndStores(AllocaInst &AI, AllocaSlices &AS) {
       if (SplitLoads) {
         PLoad = (*SplitLoads)[Idx];
       } else {
-        IRB.SetInsertPoint(BasicBlock::iterator(LI));
+        IRB.SetInsertPoint(LI);
         PLoad = IRB.CreateAlignedLoad(
             getAdjustedPtr(IRB, DL, LoadBasePtr,
                            APInt(DL.getPointerSizeInBits(), PartOffset),
@@ -3717,7 +3706,7 @@ bool SROA::presplitLoadsAndStores(AllocaInst &AI, AllocaSlices &AS) {
       }
 
       // And store this partition.
-      IRB.SetInsertPoint(BasicBlock::iterator(SI));
+      IRB.SetInsertPoint(SI);
       StoreInst *PStore = IRB.CreateAlignedStore(
           PLoad, getAdjustedPtr(IRB, DL, StoreBasePtr,
                                 APInt(DL.getPointerSizeInBits(), PartOffset),
@@ -3941,15 +3930,19 @@ AllocaInst *SROA::rewritePartition(AllocaInst &AI, AllocaSlices &AS,
       Worklist.insert(NewAI);
     }
   } else {
-    // If we can't promote the alloca, iterate on it to check for new
-    // refinements exposed by splitting the current alloca. Don't iterate on an
-    // alloca which didn't actually change and didn't get promoted.
-    if (NewAI != &AI)
-      Worklist.insert(NewAI);
-
     // Drop any post-promotion work items if promotion didn't happen.
     while (PostPromotionWorklist.size() > PPWOldSize)
       PostPromotionWorklist.pop_back();
+
+    // We couldn't promote and we didn't create a new partition, nothing
+    // happened.
+    if (NewAI == &AI)
+      return nullptr;
+
+    // If we can't promote the alloca, iterate on it to check for new
+    // refinements exposed by splitting the current alloca. Don't iterate on an
+    // alloca which didn't actually change and didn't get promoted.
+    Worklist.insert(NewAI);
   }
 
   return NewAI;
@@ -4027,14 +4020,13 @@ bool SROA::splitAlloca(AllocaInst &AI, AllocaSlices &AS) {
   if (DbgDeclareInst *DbgDecl = FindAllocaDbgDeclare(&AI)) {
     auto *Var = DbgDecl->getVariable();
     auto *Expr = DbgDecl->getExpression();
-    DIBuilder DIB(*AI.getParent()->getParent()->getParent(),
-                  /*AllowUnresolved*/ false);
-    bool IsSplit = Pieces.size() > 1;
+    DIBuilder DIB(*AI.getModule(), /*AllowUnresolved*/ false);
+    uint64_t AllocaSize = DL.getTypeSizeInBits(AI.getAllocatedType());
     for (auto Piece : Pieces) {
       // Create a piece expression describing the new partition or reuse AI's
       // expression if there is only one partition.
       auto *PieceExpr = Expr;
-      if (IsSplit || Expr->isBitPiece()) {
+      if (Piece.Size < AllocaSize || Expr->isBitPiece()) {
         // If this alloca is already a scalar replacement of a larger aggregate,
         // Piece.Offset describes the offset inside the scalar.
         uint64_t Offset = Expr->isBitPiece() ? Expr->getBitPieceOffset() : 0;
@@ -4048,6 +4040,9 @@ bool SROA::splitAlloca(AllocaInst &AI, AllocaSlices &AS) {
           Size = std::min(Size, AbsEnd - Start);
         }
         PieceExpr = DIB.createBitPieceExpression(Start, Size);
+      } else {
+        assert(Pieces.size() == 1 &&
+               "partition is as large as original alloca");
       }
 
       // Remove any existing dbg.declare intrinsic describing the same alloca.
@@ -4101,7 +4096,7 @@ bool SROA::runOnAlloca(AllocaInst &AI) {
 
   // First, split any FCA loads and stores touching this alloca to promote
   // better splitting and promotion opportunities.
-  AggLoadStoreRewriter AggRewriter(DL);
+  AggLoadStoreRewriter AggRewriter;
   Changed |= AggRewriter.rewrite(AI);
 
   // Build the slices using a recursive instruction-visiting builder.
@@ -4242,14 +4237,19 @@ PreservedAnalyses SROA::runImpl(Function &F, DominatorTree &RunDT,
     PostPromotionWorklist.clear();
   } while (!Worklist.empty());
 
+  if (!Changed)
+    return PreservedAnalyses::all();
+
   // FIXME: Even when promoting allocas we should preserve some abstract set of
   // CFG-specific analyses.
-  return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
+  PreservedAnalyses PA;
+  PA.preserve<GlobalsAA>();
+  return PA;
 }
 
-PreservedAnalyses SROA::run(Function &F, AnalysisManager<Function> *AM) {
-  return runImpl(F, AM->getResult<DominatorTreeAnalysis>(F),
-                 AM->getResult<AssumptionAnalysis>(F));
+PreservedAnalyses SROA::run(Function &F, AnalysisManager<Function> &AM) {
+  return runImpl(F, AM.getResult<DominatorTreeAnalysis>(F),
+                 AM.getResult<AssumptionAnalysis>(F));
 }
 
 /// A legacy pass for the legacy pass manager that wraps the \c SROA pass.
@@ -4265,7 +4265,7 @@ public:
     initializeSROALegacyPassPass(*PassRegistry::getPassRegistry());
   }
   bool runOnFunction(Function &F) override {
-    if (skipOptnoneFunction(F))
+    if (skipFunction(F))
       return false;
 
     auto PA = Impl.runImpl(

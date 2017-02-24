@@ -269,7 +269,7 @@ void LoopBase<BlockT, LoopT>::verifyLoop() const {
       // A non-header loop shouldn't be reachable from outside the loop,
       // though it is permitted if the predecessor is not itself actually
       // reachable.
-      BlockT *EntryBB = BB->getParent()->begin();
+      BlockT *EntryBB = &BB->getParent()->front();
       for (BlockT *CB : depth_first(EntryBB))
         for (unsigned i = 0, e = OutsideLoopPreds.size(); i != e; ++i)
           assert(CB != OutsideLoopPreds[i] &&
@@ -277,7 +277,7 @@ void LoopBase<BlockT, LoopT>::verifyLoop() const {
     }
     assert(HasInsideLoopPreds && "Loop block has no in-loop predecessors!");
     assert(HasInsideLoopSuccs && "Loop block has no in-loop successors!");
-    assert(BB != getHeader()->getParent()->begin() &&
+    assert(BB != &getHeader()->getParent()->front() &&
            "Loop contains function entry block!");
 
     NumVisited++;

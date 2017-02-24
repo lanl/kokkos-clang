@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -fsyntax-only -verify %s
+// RUN: %clang_cc1 -fsyntax-only -verify %s -Wincompatible-pointer-types
 
 int var __attribute__((overloadable)); // expected-error{{'overloadable' attribute only applies to functions}}
 void params(void) __attribute__((overloadable(12))); // expected-error {{'overloadable' attribute takes no arguments}}
@@ -85,3 +85,40 @@ void local() {
 void after_local_1(int) __attribute__((overloadable)); // expected-error {{conflicting types}}
 void after_local_2(int); // expected-error {{must have the 'overloadable' attribute}}
 void after_local_3(int) __attribute__((overloadable));
+
+// Make sure we allow C-specific conversions in C.
+void conversions() {
+  void foo(char *c) __attribute__((overloadable));
+  void foo(char *c) __attribute__((overloadable, enable_if(c, "nope.jpg")));
+
+  void *ptr;
+  foo(ptr);
+
+  void multi_type(unsigned char *c) __attribute__((overloadable));
+  void multi_type(signed char *c) __attribute__((overloadable));
+  unsigned char *c;
+  multi_type(c);
+}
+
+// Ensure that we allow C-specific type conversions in C
+void fn_type_conversions() {
+  void foo(void *c) __attribute__((overloadable));
+  void foo(char *c) __attribute__((overloadable));
+  void (*ptr1)(void *) = &foo;
+  void (*ptr2)(char *) = &foo;
+  void (*ambiguous)(int *) = &foo; // expected-error{{initializing 'void (*)(int *)' with an expression of incompatible type '<overloaded function type>'}} expected-note@105{{candidate function}} expected-note@106{{candidate function}}
+  void *vp_ambiguous = &foo; // expected-error{{initializing 'void *' with an expression of incompatible type '<overloaded function type>'}} expected-note@105{{candidate function}} expected-note@106{{candidate function}}
+
+  void (*specific1)(int *) = (void (*)(void *))&foo; // expected-warning{{incompatible pointer types initializing 'void (*)(int *)' with an expression of type 'void (*)(void *)'}}
+  void *specific2 = (void (*)(void *))&foo;
+
+  void disabled(void *c) __attribute__((overloadable, enable_if(0, "")));
+  void disabled(int *c) __attribute__((overloadable, enable_if(c, "")));
+  void disabled(char *c) __attribute__((overloadable, enable_if(1, "The function name lies.")));
+  // To be clear, these should all point to the last overload of 'disabled'
+  void (*dptr1)(char *c) = &disabled;
+  void (*dptr2)(void *c) = &disabled; // expected-warning{{incompatible pointer types initializing 'void (*)(void *)' with an expression of type '<overloaded function type>'}} expected-note@115{{candidate function made ineligible by enable_if}} expected-note@116{{candidate function made ineligible by enable_if}} expected-note@117{{candidate function has type mismatch at 1st parameter (expected 'void *' but has 'char *')}}
+  void (*dptr3)(int *c) = &disabled; // expected-warning{{incompatible pointer types initializing 'void (*)(int *)' with an expression of type '<overloaded function type>'}} expected-note@115{{candidate function made ineligible by enable_if}} expected-note@116{{candidate function made ineligible by enable_if}} expected-note@117{{candidate function has type mismatch at 1st parameter (expected 'int *' but has 'char *')}}
+
+  void *specific_disabled = &disabled;
+}

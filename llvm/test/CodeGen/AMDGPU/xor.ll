@@ -38,7 +38,7 @@ define void @xor_v4i32(<4 x i32> addrspace(1)* %out, <4 x i32> addrspace(1)* %in
 }
 
 ; FUNC-LABEL: {{^}}xor_i1:
-; EG: XOR_INT {{\** *}}T{{[0-9]+\.[XYZW], PV\.[XYZW], PS}}
+; EG: XOR_INT {{\** *}}{{T[0-9]+\.[XYZW]}}, {{PS|PV\.[XYZW]}}, {{PS|PV\.[XYZW]}}
 
 ; SI-DAG: v_cmp_le_f32_e32 [[CMP0:vcc]], 0, {{v[0-9]+}}
 ; SI-DAG: v_cmp_le_f32_e64 [[CMP1:s\[[0-9]+:[0-9]+\]]], 1.0, {{v[0-9]+}}
@@ -64,8 +64,8 @@ define void @xor_i1(float addrspace(1)* %out, float addrspace(1)* %in0, float ad
 ; SI: v_and_b32_e32 [[RESULT:v[0-9]+]], 1, [[XOR]]
 ; SI: buffer_store_byte [[RESULT]]
 define void @v_xor_i1(i1 addrspace(1)* %out, i1 addrspace(1)* %in0, i1 addrspace(1)* %in1) {
-  %a = load i1, i1 addrspace(1)* %in0
-  %b = load i1, i1 addrspace(1)* %in1
+  %a = load volatile i1, i1 addrspace(1)* %in0
+  %b = load volatile i1, i1 addrspace(1)* %in1
   %xor = xor i1 %a, %b
   store i1 %xor, i1 addrspace(1)* %out
   ret void

@@ -12,56 +12,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-/*
- * ###########################################################################
- * Copyright (c) 2016, Los Alamos National Security, LLC All rights
- * reserved. Copyright 2016. Los Alamos National Security, LLC. This
- * software was produced under U.S. Government contract DE-AC52-06NA25396
- * for Los Alamos National Laboratory (LANL), which is operated by Los
- * Alamos National Security, LLC for the U.S. Department of Energy. The
- * U.S. Government has rights to use, reproduce, and distribute this
- * software.  NEITHER THE GOVERNMENT NOR LOS ALAMOS NATIONAL SECURITY,
- * LLC MAKES ANY WARRANTY, EXPRESS OR IMPLIED, OR ASSUMES ANY LIABILITY
- * FOR THE USE OF THIS SOFTWARE.  If software is modified to produce
- * derivative works, such modified software should be clearly marked, so
- * as not to confuse it with the version available from LANL.
- *  
- * Additionally, redistribution and use in source and binary forms, with
- * or without modification, are permitted provided that the following
- * conditions are met: 1.       Redistributions of source code must
- * retain the above copyright notice, this list of conditions and the
- * following disclaimer. 2.      Redistributions in binary form must
- * reproduce the above copyright notice, this list of conditions and the
- * following disclaimer in the documentation and/or other materials
- * provided with the distribution. 3.      Neither the name of Los Alamos
- * National Security, LLC, Los Alamos National Laboratory, LANL, the U.S.
- * Government, nor the names of its contributors may be used to endorse
- * or promote products derived from this software without specific prior
- * written permission.
-  
- * THIS SOFTWARE IS PROVIDED BY LOS ALAMOS NATIONAL SECURITY, LLC AND
- * CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING,
- * BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
- * FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL LOS
- * ALAMOS NATIONAL SECURITY, LLC OR CONTRIBUTORS BE LIABLE FOR ANY
- * DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
- * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
- * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE US
- * ########################################################################### 
- * 
- * Notes
- *
- * ##### 
- */
-
 // +===== ideas ========================================================+
 #include <unistd.h>
 #include <iostream>
 #include <sstream>
 // +====================================================================+
+
 
 #include "clang/Basic/CharInfo.h"
 #include "clang/Basic/DiagnosticOptions.h"
@@ -181,7 +137,7 @@ static void ApplyOneQAOverride(raw_ostream &OS,
       }
     }
   } else if (Edit[0] == 'x' || Edit[0] == 'X') {
-    std::string Option = Edit.substr(1, std::string::npos);
+    auto Option = Edit.substr(1);
     for (unsigned i = 1; i < Args.size();) {
       if (Option == Args[i]) {
         OS << "### Deleting argument " << Args[i] << '\n';
@@ -341,9 +297,9 @@ static void SetInstallDir(SmallVectorImpl<const char *> &argv,
   if (CanonicalPrefixes)
     llvm::sys::fs::make_absolute(InstalledPath);
 
-  InstalledPath = llvm::sys::path::parent_path(InstalledPath);
-  if (llvm::sys::fs::exists(InstalledPath.c_str()))
-    TheDriver.setInstalledDir(InstalledPath);
+  StringRef InstalledPathParent(llvm::sys::path::parent_path(InstalledPath));
+  if (llvm::sys::fs::exists(InstalledPathParent))
+    TheDriver.setInstalledDir(InstalledPathParent);
 }
 
 static int ExecuteCC1Tool(ArrayRef<const char *> argv, StringRef Tool) {
@@ -359,8 +315,9 @@ static int ExecuteCC1Tool(ArrayRef<const char *> argv, StringRef Tool) {
 }
 
 int main(int argc_, const char **argv_) {
-  llvm::sys::PrintStackTraceOnErrorSignal();
+  llvm::sys::PrintStackTraceOnErrorSignal(argv_[0]);
   llvm::PrettyStackTraceProgram X(argc_, argv_);
+  llvm::llvm_shutdown_obj Y; // Call llvm_shutdown() on exit.
 
   if (llvm::sys::Process::FixupStandardFileDescriptors())
     return 1;
@@ -389,18 +346,33 @@ int main(int argc_, const char **argv_) {
   // have to manually search for a --driver-mode=cl argument the hard way.
   // Finally, our -cc1 tools don't care which tokenization mode we use because
   // response files written by clang will tokenize the same way in either mode.
-  llvm::cl::TokenizerCallback Tokenizer = &llvm::cl::TokenizeGNUCommandLine;
+  bool ClangCLMode = false;
   if (TargetAndMode.second == "--driver-mode=cl" ||
       std::find_if(argv.begin(), argv.end(), [](const char *F) {
         return F && strcmp(F, "--driver-mode=cl") == 0;
       }) != argv.end()) {
-    Tokenizer = &llvm::cl::TokenizeWindowsCommandLine;
+    ClangCLMode = true;
+  }
+  enum { Default, POSIX, Windows } RSPQuoting = Default;
+  for (const char *F : argv) {
+    if (strcmp(F, "--rsp-quoting=posix") == 0)
+      RSPQuoting = POSIX;
+    else if (strcmp(F, "--rsp-quoting=windows") == 0)
+      RSPQuoting = Windows;
   }
 
   // Determines whether we want nullptr markers in argv to indicate response
-  // files end-of-lines. We only use this for the /LINK driver argument.
-  bool MarkEOLs = true;
-  if (argv.size() > 1 && StringRef(argv[1]).startswith("-cc1"))
+  // files end-of-lines. We only use this for the /LINK driver argument with
+  // clang-cl.exe on Windows.
+  bool MarkEOLs = ClangCLMode;
+
+  llvm::cl::TokenizerCallback Tokenizer;
+  if (RSPQuoting == Windows || (RSPQuoting == Default && ClangCLMode))
+    Tokenizer = &llvm::cl::TokenizeWindowsCommandLine;
+  else
+    Tokenizer = &llvm::cl::TokenizeGNUCommandLine;
+
+  if (MarkEOLs && argv.size() > 1 && StringRef(argv[1]).startswith("-cc1"))
     MarkEOLs = false;
   llvm::cl::ExpandResponseFiles(Saver, Tokenizer, argv, MarkEOLs);
 
@@ -409,7 +381,7 @@ int main(int argc_, const char **argv_) {
   for (int i = 2, size = argv.size(); i < size; ++i) {
     if ( argv[i] != NULL && StringRef(argv[i]) == "-debug") {
       size_t pid = getpid();
-      
+
       std::cerr << "PID: " << pid << std::endl;
       std::cerr << "<press any key after attaching debugger, then 'continue' in debugger>" << std::endl;
       std::string str;
@@ -546,8 +518,6 @@ int main(int argc_, const char **argv_) {
   // If any timers were active but haven't been destroyed yet, print their
   // results now.  This happens in -disable-free mode.
   llvm::TimerGroup::printAll(llvm::errs());
-
-  llvm::llvm_shutdown();
 
 #ifdef LLVM_ON_WIN32
   // Exit status should not be negative on Win32, unless abnormal termination.

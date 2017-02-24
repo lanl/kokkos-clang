@@ -21,7 +21,7 @@ namespace {
 
 
 TEST(IntegerDivision, SDiv) {
-  LLVMContext &C(getGlobalContext());
+  LLVMContext C;
   Module M("test division", C);
   IRBuilder<> Builder(C);
 
@@ -35,8 +35,8 @@ TEST(IntegerDivision, SDiv) {
   Builder.SetInsertPoint(BB);
 
   Function::arg_iterator AI = F->arg_begin();
-  Value *A = AI++;
-  Value *B = AI++;
+  Value *A = &*AI++;
+  Value *B = &*AI++;
 
   Value *Div = Builder.CreateSDiv(A, B);
   EXPECT_TRUE(BB->front().getOpcode() == Instruction::SDiv);
@@ -51,7 +51,7 @@ TEST(IntegerDivision, SDiv) {
 }
 
 TEST(IntegerDivision, UDiv) {
-  LLVMContext &C(getGlobalContext());
+  LLVMContext C;
   Module M("test division", C);
   IRBuilder<> Builder(C);
 
@@ -65,8 +65,8 @@ TEST(IntegerDivision, UDiv) {
   Builder.SetInsertPoint(BB);
 
   Function::arg_iterator AI = F->arg_begin();
-  Value *A = AI++;
-  Value *B = AI++;
+  Value *A = &*AI++;
+  Value *B = &*AI++;
 
   Value *Div = Builder.CreateUDiv(A, B);
   EXPECT_TRUE(BB->front().getOpcode() == Instruction::UDiv);
@@ -81,7 +81,7 @@ TEST(IntegerDivision, UDiv) {
 }
 
 TEST(IntegerDivision, SRem) {
-  LLVMContext &C(getGlobalContext());
+  LLVMContext C;
   Module M("test remainder", C);
   IRBuilder<> Builder(C);
 
@@ -95,8 +95,8 @@ TEST(IntegerDivision, SRem) {
   Builder.SetInsertPoint(BB);
 
   Function::arg_iterator AI = F->arg_begin();
-  Value *A = AI++;
-  Value *B = AI++;
+  Value *A = &*AI++;
+  Value *B = &*AI++;
 
   Value *Rem = Builder.CreateSRem(A, B);
   EXPECT_TRUE(BB->front().getOpcode() == Instruction::SRem);
@@ -111,7 +111,7 @@ TEST(IntegerDivision, SRem) {
 }
 
 TEST(IntegerDivision, URem) {
-  LLVMContext &C(getGlobalContext());
+  LLVMContext C;
   Module M("test remainder", C);
   IRBuilder<> Builder(C);
 
@@ -125,8 +125,8 @@ TEST(IntegerDivision, URem) {
   Builder.SetInsertPoint(BB);
 
   Function::arg_iterator AI = F->arg_begin();
-  Value *A = AI++;
-  Value *B = AI++;
+  Value *A = &*AI++;
+  Value *B = &*AI++;
 
   Value *Rem = Builder.CreateURem(A, B);
   EXPECT_TRUE(BB->front().getOpcode() == Instruction::URem);
@@ -142,7 +142,7 @@ TEST(IntegerDivision, URem) {
 
 
 TEST(IntegerDivision, SDiv64) {
-  LLVMContext &C(getGlobalContext());
+  LLVMContext C;
   Module M("test division", C);
   IRBuilder<> Builder(C);
 
@@ -156,8 +156,8 @@ TEST(IntegerDivision, SDiv64) {
   Builder.SetInsertPoint(BB);
 
   Function::arg_iterator AI = F->arg_begin();
-  Value *A = AI++;
-  Value *B = AI++;
+  Value *A = &*AI++;
+  Value *B = &*AI++;
 
   Value *Div = Builder.CreateSDiv(A, B);
   EXPECT_TRUE(BB->front().getOpcode() == Instruction::SDiv);
@@ -172,7 +172,7 @@ TEST(IntegerDivision, SDiv64) {
 }
 
 TEST(IntegerDivision, UDiv64) {
-  LLVMContext &C(getGlobalContext());
+  LLVMContext C;
   Module M("test division", C);
   IRBuilder<> Builder(C);
 
@@ -186,8 +186,8 @@ TEST(IntegerDivision, UDiv64) {
   Builder.SetInsertPoint(BB);
 
   Function::arg_iterator AI = F->arg_begin();
-  Value *A = AI++;
-  Value *B = AI++;
+  Value *A = &*AI++;
+  Value *B = &*AI++;
 
   Value *Div = Builder.CreateUDiv(A, B);
   EXPECT_TRUE(BB->front().getOpcode() == Instruction::UDiv);
@@ -202,7 +202,7 @@ TEST(IntegerDivision, UDiv64) {
 }
 
 TEST(IntegerDivision, SRem64) {
-  LLVMContext &C(getGlobalContext());
+  LLVMContext C;
   Module M("test remainder", C);
   IRBuilder<> Builder(C);
 
@@ -216,8 +216,8 @@ TEST(IntegerDivision, SRem64) {
   Builder.SetInsertPoint(BB);
 
   Function::arg_iterator AI = F->arg_begin();
-  Value *A = AI++;
-  Value *B = AI++;
+  Value *A = &*AI++;
+  Value *B = &*AI++;
 
   Value *Rem = Builder.CreateSRem(A, B);
   EXPECT_TRUE(BB->front().getOpcode() == Instruction::SRem);
@@ -232,7 +232,7 @@ TEST(IntegerDivision, SRem64) {
 }
 
 TEST(IntegerDivision, URem64) {
-  LLVMContext &C(getGlobalContext());
+  LLVMContext C;
   Module M("test remainder", C);
   IRBuilder<> Builder(C);
 
@@ -246,8 +246,8 @@ TEST(IntegerDivision, URem64) {
   Builder.SetInsertPoint(BB);
 
   Function::arg_iterator AI = F->arg_begin();
-  Value *A = AI++;
-  Value *B = AI++;
+  Value *A = &*AI++;
+  Value *B = &*AI++;
 
   Value *Rem = Builder.CreateURem(A, B);
   EXPECT_TRUE(BB->front().getOpcode() == Instruction::URem);

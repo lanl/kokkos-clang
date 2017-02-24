@@ -24,15 +24,13 @@ using namespace llvm;
 // Pin the vtable to this file.
 void MachineRegisterInfo::Delegate::anchor() {}
 
-MachineRegisterInfo::MachineRegisterInfo(const MachineFunction *MF)
-  : MF(MF), TheDelegate(nullptr), IsSSA(true), TracksLiveness(true),
-    TracksSubRegLiveness(false) {
+MachineRegisterInfo::MachineRegisterInfo(MachineFunction *MF)
+    : MF(MF), TheDelegate(nullptr), TracksSubRegLiveness(false) {
+  unsigned NumRegs = getTargetRegisterInfo()->getNumRegs();
   VRegInfo.reserve(256);
   RegAllocHints.reserve(256);
-  UsedPhysRegMask.resize(getTargetRegisterInfo()->getNumRegs());
-
-  // Create the physreg use/def lists.
-  PhysRegUseDefLists.resize(getTargetRegisterInfo()->getNumRegs(), nullptr);
+  UsedPhysRegMask.resize(NumRegs);
+  PhysRegUseDefLists.reset(new MachineOperand*[NumRegs]());
 }
 
 /// setRegClass - Set the register class of the specified virtual register.
@@ -41,6 +39,11 @@ void
 MachineRegisterInfo::setRegClass(unsigned Reg, const TargetRegisterClass *RC) {
   assert(RC && RC->isAllocatable() && "Invalid RC for virtual register");
   VRegInfo[Reg].first = RC;
+}
+
+void MachineRegisterInfo::setRegBank(unsigned Reg,
+                                     const RegisterBank &RegBank) {
+  VRegInfo[Reg].first = &RegBank;
 }
 
 const TargetRegisterClass *
@@ -98,6 +101,32 @@ MachineRegisterInfo::createVirtualRegister(const TargetRegisterClass *RegClass){
   unsigned Reg = TargetRegisterInfo::index2VirtReg(getNumVirtRegs());
   VRegInfo.grow(Reg);
   VRegInfo[Reg].first = RegClass;
+  RegAllocHints.grow(Reg);
+  if (TheDelegate)
+    TheDelegate->MRI_NoteNewVirtualRegister(Reg);
+  return Reg;
+}
+
+unsigned
+MachineRegisterInfo::getSize(unsigned VReg) const {
+  VRegToSizeMap::const_iterator SizeIt = getVRegToSize().find(VReg);
+  return SizeIt != getVRegToSize().end() ? SizeIt->second : 0;
+}
+
+void MachineRegisterInfo::setSize(unsigned VReg, unsigned Size) {
+  getVRegToSize()[VReg] = Size;
+}
+
+unsigned
+MachineRegisterInfo::createGenericVirtualRegister(unsigned Size) {
+  assert(Size && "Cannot create empty virtual register");
+
+  // New virtual register number.
+  unsigned Reg = TargetRegisterInfo::index2VirtReg(getNumVirtRegs());
+  VRegInfo.grow(Reg);
+  // FIXME: Should we use a dummy register class?
+  VRegInfo[Reg].first = static_cast<TargetRegisterClass *>(nullptr);
+  getVRegToSize()[Reg] = Size;
   RegAllocHints.grow(Reg);
   if (TheDelegate)
     TheDelegate->MRI_NoteNewVirtualRegister(Reg);
@@ -468,20 +497,18 @@ static bool isNoReturnDef(const MachineOperand &MO) {
   if (MF.getFunction()->hasFnAttribute(Attribute::UWTable))
     return false;
   const Function *Called = getCalledFunction(MI);
-  if (Called == nullptr || !Called->hasFnAttribute(Attribute::NoReturn)
-      || !Called->hasFnAttribute(Attribute::NoUnwind))
-    return false;
-
-  return true;
+  return !(Called == nullptr || !Called->hasFnAttribute(Attribute::NoReturn) ||
+           !Called->hasFnAttribute(Attribute::NoUnwind));
 }
 
-bool MachineRegisterInfo::isPhysRegModified(unsigned PhysReg) const {
+bool MachineRegisterInfo::isPhysRegModified(unsigned PhysReg,
+                                            bool SkipNoReturnDef) const {
   if (UsedPhysRegMask.test(PhysReg))
     return true;
   const TargetRegisterInfo *TRI = getTargetRegisterInfo();
   for (MCRegAliasIterator AI(PhysReg, TRI, true); AI.isValid(); ++AI) {
     for (const MachineOperand &MO : make_range(def_begin(*AI), def_end())) {
-      if (isNoReturnDef(MO))
+      if (!SkipNoReturnDef && isNoReturnDef(MO))
         continue;
       return true;
     }

@@ -28,6 +28,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <map>
+#include <unordered_set>
 using namespace llvm;
 using namespace llvm::legacy;
 
@@ -83,6 +84,13 @@ PrintAfterAll("print-after-all",
               llvm::cl::desc("Print IR after each pass"),
               cl::init(false));
 
+static cl::list<std::string>
+    PrintFuncsList("filter-print-funcs", cl::value_desc("function names"),
+                   cl::desc("Only print IR for functions whose name "
+                            "match this for all print-[before|after][-all] "
+                            "options"),
+                   cl::CommaSeparated);
+
 /// This is a helper to determine whether to print IR before or
 /// after a pass.
 
@@ -109,6 +117,11 @@ static bool ShouldPrintAfterPass(const PassInfo *PI) {
   return PrintAfterAll || ShouldPrintBeforeOrAfterPass(PI, PrintAfter);
 }
 
+bool llvm::isFunctionInPrintList(StringRef FunctionName) {
+  static std::unordered_set<std::string> PrintFuncNames(PrintFuncsList.begin(),
+                                                        PrintFuncsList.end());
+  return PrintFuncNames.empty() || PrintFuncNames.count(FunctionName);
+}
 /// isPassDebuggingExecutionsOrMore - Return true if -debug-pass=Executions
 /// or higher is specified.
 bool PMDataManager::isPassDebuggingExecutionsOrMore() const {
@@ -312,14 +325,6 @@ public:
   using llvm::Pass::doInitialization;
   using llvm::Pass::doFinalization;
 
-  /// doInitialization - Run all of the initializers for the module passes.
-  ///
-  bool doInitialization();
-
-  /// doFinalization - Run all of the finalizers for the module passes.
-  ///
-  bool doFinalization();
-
   /// Pass Manager itself does not invalidate any analysis info.
   void getAnalysisUsage(AnalysisUsage &Info) const override {
     Info.setPreservesAll();
@@ -409,14 +414,6 @@ public:
 
   using llvm::Pass::doInitialization;
   using llvm::Pass::doFinalization;
-
-  /// doInitialization - Run all of the initializers for the module passes.
-  ///
-  bool doInitialization();
-
-  /// doFinalization - Run all of the finalizers for the module passes.
-  ///
-  bool doFinalization();
 
   /// Pass Manager itself does not invalidate any analysis info.
   void getAnalysisUsage(AnalysisUsage &Info) const override {
@@ -518,9 +515,8 @@ PMTopLevelManager::setLastUser(ArrayRef<Pass*> AnalysisPasses, Pass *P) {
     const AnalysisUsage::VectorType &IDs = AnUsage->getRequiredTransitiveSet();
     SmallVector<Pass *, 12> LastUses;
     SmallVector<Pass *, 12> LastPMUses;
-    for (AnalysisUsage::VectorType::const_iterator I = IDs.begin(),
-         E = IDs.end(); I != E; ++I) {
-      Pass *AnalysisPass = findAnalysisPass(*I);
+    for (AnalysisID ID : IDs) {
+      Pass *AnalysisPass = findAnalysisPass(ID);
       assert(AnalysisPass && "Expected analysis pass to exist.");
       AnalysisResolver *AR = AnalysisPass->getResolver();
       assert(AR && "Expected analysis resolver to exist.");
@@ -569,13 +565,33 @@ void PMTopLevelManager::collectLastUses(SmallVectorImpl<Pass *> &LastUses,
 
 AnalysisUsage *PMTopLevelManager::findAnalysisUsage(Pass *P) {
   AnalysisUsage *AnUsage = nullptr;
-  DenseMap<Pass *, AnalysisUsage *>::iterator DMI = AnUsageMap.find(P);
+  auto DMI = AnUsageMap.find(P);
   if (DMI != AnUsageMap.end())
     AnUsage = DMI->second;
   else {
-    AnUsage = new AnalysisUsage();
-    P->getAnalysisUsage(*AnUsage);
-    AnUsageMap[P] = AnUsage;
+    // Look up the analysis usage from the pass instance (different instances
+    // of the same pass can produce different results), but unique the
+    // resulting object to reduce memory usage.  This helps to greatly reduce
+    // memory usage when we have many instances of only a few pass types
+    // (e.g. instcombine, simplifycfg, etc...) which tend to share a fixed set
+    // of dependencies.
+    AnalysisUsage AU;
+    P->getAnalysisUsage(AU);
+    
+    AUFoldingSetNode* Node = nullptr;
+    FoldingSetNodeID ID;
+    AUFoldingSetNode::Profile(ID, AU);
+    void *IP = nullptr;
+    if (auto *N = UniqueAnalysisUsages.FindNodeOrInsertPos(ID, IP))
+      Node = N;
+    else {
+      Node = new (AUFoldingSetNodeAllocator.Allocate()) AUFoldingSetNode(AU);
+      UniqueAnalysisUsages.InsertNode(Node, IP);
+    }
+    assert(Node && "cached analysis usage must be non null");
+
+    AnUsageMap[P] = &Node->AU;
+    AnUsage = &Node->AU;;
   }
   return AnUsage;
 }
@@ -758,57 +774,39 @@ void PMTopLevelManager::dumpArguments() const {
     return;
 
   dbgs() << "Pass Arguments: ";
-  for (SmallVectorImpl<ImmutablePass *>::const_iterator I =
-       ImmutablePasses.begin(), E = ImmutablePasses.end(); I != E; ++I)
-    if (const PassInfo *PI = findAnalysisPassInfo((*I)->getPassID())) {
+  for (ImmutablePass *P : ImmutablePasses)
+    if (const PassInfo *PI = findAnalysisPassInfo(P->getPassID())) {
       assert(PI && "Expected all immutable passes to be initialized");
       if (!PI->isAnalysisGroup())
         dbgs() << " -" << PI->getPassArgument();
     }
-  for (SmallVectorImpl<PMDataManager *>::const_iterator I =
-       PassManagers.begin(), E = PassManagers.end(); I != E; ++I)
-    (*I)->dumpPassArguments();
+  for (PMDataManager *PM : PassManagers)
+    PM->dumpPassArguments();
   dbgs() << "\n";
 }
 
 void PMTopLevelManager::initializeAllAnalysisInfo() {
-  for (SmallVectorImpl<PMDataManager *>::iterator I = PassManagers.begin(),
-         E = PassManagers.end(); I != E; ++I)
-    (*I)->initializeAnalysisInfo();
+  for (PMDataManager *PM : PassManagers)
+    PM->initializeAnalysisInfo();
 
   // Initailize other pass managers
-  for (SmallVectorImpl<PMDataManager *>::iterator
-       I = IndirectPassManagers.begin(), E = IndirectPassManagers.end();
-       I != E; ++I)
-    (*I)->initializeAnalysisInfo();
+  for (PMDataManager *IPM : IndirectPassManagers)
+    IPM->initializeAnalysisInfo();
 
   for (DenseMap<Pass *, Pass *>::iterator DMI = LastUser.begin(),
         DME = LastUser.end(); DMI != DME; ++DMI) {
-    DenseMap<Pass *, SmallPtrSet<Pass *, 8> >::iterator InvDMI =
-      InversedLastUser.find(DMI->second);
-    if (InvDMI != InversedLastUser.end()) {
-      SmallPtrSet<Pass *, 8> &L = InvDMI->second;
-      L.insert(DMI->first);
-    } else {
-      SmallPtrSet<Pass *, 8> L; L.insert(DMI->first);
-      InversedLastUser[DMI->second] = L;
-    }
+    SmallPtrSet<Pass *, 8> &L = InversedLastUser[DMI->second];
+    L.insert(DMI->first);
   }
 }
 
 /// Destructor
 PMTopLevelManager::~PMTopLevelManager() {
-  for (SmallVectorImpl<PMDataManager *>::iterator I = PassManagers.begin(),
-         E = PassManagers.end(); I != E; ++I)
-    delete *I;
+  for (PMDataManager *PM : PassManagers)
+    delete PM;
 
-  for (SmallVectorImpl<ImmutablePass *>::iterator
-         I = ImmutablePasses.begin(), E = ImmutablePasses.end(); I != E; ++I)
-    delete *I;
-
-  for (DenseMap<Pass *, AnalysisUsage *>::iterator DMI = AnUsageMap.begin(),
-         DME = AnUsageMap.end(); DMI != DME; ++DMI)
-    delete DMI->second;
+  for (ImmutablePass *P : ImmutablePasses)
+    delete P;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1805,7 +1803,7 @@ void PMStack::push(PMDataManager *PM) {
 }
 
 // Dump content of the pass manager stack.
-void PMStack::dump() const {
+LLVM_DUMP_METHOD void PMStack::dump() const {
   for (PMDataManager *Manager : S)
     dbgs() << Manager->getAsPass()->getPassName() << ' ';
 

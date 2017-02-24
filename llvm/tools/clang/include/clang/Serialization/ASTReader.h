@@ -27,9 +27,11 @@
 #include "clang/Lex/HeaderSearch.h"
 #include "clang/Lex/PreprocessingRecord.h"
 #include "clang/Sema/ExternalSemaSource.h"
+#include "clang/Sema/IdentifierResolver.h"
 #include "clang/Serialization/ASTBitCodes.h"
 #include "clang/Serialization/ContinuousRangeMap.h"
 #include "clang/Serialization/Module.h"
+#include "clang/Serialization/ModuleFileExtension.h"
 #include "clang/Serialization/ModuleManager.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
@@ -38,6 +40,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/TinyPtrVector.h"
 #include "llvm/Bitcode/BitstreamReader.h"
@@ -205,6 +208,10 @@ public:
   /// \brief If needsImportVisitation returns \c true, this is called for each
   /// AST file imported by this AST file.
   virtual void visitImport(StringRef Filename) {}
+
+  /// Indicates that a particular module file extension has been read.
+  virtual void readModuleFileExtension(
+                 const ModuleFileExtensionMetadata &Metadata) {}
 };
 
 /// \brief Simple wrapper class for chaining listeners.
@@ -247,6 +254,8 @@ public:
                        serialization::ModuleKind Kind) override;
   bool visitInputFile(StringRef Filename, bool isSystem,
                       bool isOverridden, bool isExplicitModule) override;
+  void readModuleFileExtension(
+         const ModuleFileExtensionMetadata &Metadata) override;
 };
 
 /// \brief ASTReaderListener implementation to validate the information of
@@ -382,6 +391,14 @@ private:
   /// \brief The module manager which manages modules and their dependencies
   ModuleManager ModuleMgr;
 
+  /// \brief A dummy identifier resolver used to merge TU-scope declarations in
+  /// C, for the cases where we don't have a Sema object to provide a real
+  /// identifier resolver.
+  IdentifierResolver DummyIdResolver;
+
+  /// A mapping from extension block names to module file extensions.
+  llvm::StringMap<IntrusiveRefCntPtr<ModuleFileExtension>> ModuleFileExtensions;
+
   /// \brief A timer used to track the time spent deserializing.
   std::unique_ptr<llvm::Timer> ReadTimer;
 
@@ -457,21 +474,6 @@ private:
   /// canonical declaration (used only for deduplication) and the value is a
   /// declaration that has an exception specification.
   llvm::SmallMapVector<Decl *, FunctionDecl *, 4> PendingExceptionSpecUpdates;
-
-  struct ReplacedDeclInfo {
-    ModuleFile *Mod;
-    uint64_t Offset;
-    unsigned RawLoc;
-
-    ReplacedDeclInfo() : Mod(nullptr), Offset(0), RawLoc(0) {}
-    ReplacedDeclInfo(ModuleFile *Mod, uint64_t Offset, unsigned RawLoc)
-      : Mod(Mod), Offset(Offset), RawLoc(RawLoc) {}
-  };
-
-  typedef llvm::DenseMap<serialization::DeclID, ReplacedDeclInfo>
-      DeclReplacementMap;
-  /// \brief Declarations that have been replaced in a later file in the chain.
-  DeclReplacementMap ReplacedDecls;
 
   /// \brief Declarations that have been imported and have typedef names for
   /// linkage purposes.
@@ -657,6 +659,10 @@ private:
   /// global method pool for this selector.
   llvm::DenseMap<Selector, unsigned> SelectorGeneration;
 
+  /// Whether a selector is out of date. We mark a selector as out of date
+  /// if we load another module after the method pool entry was pulled in.
+  llvm::DenseMap<Selector, bool> SelectorOutOfDate;
+
   struct PendingMacroInfo {
     ModuleFile *M;
     uint64_t MacroDirectivesOffset;
@@ -774,6 +780,13 @@ private:
   /// \brief The pragma clang optimize location (if the pragma state is "off").
   SourceLocation OptimizeOffPragmaLocation;
 
+  /// \brief The PragmaMSStructKind pragma ms_struct state if set, or -1.
+  int PragmaMSStructState;
+
+  /// \brief The PragmaMSPointersToMembersKind pragma pointers_to_members state.
+  int PragmaMSPointersToMembersState;
+  SourceLocation PointersToMembersPragmaLocation;
+
   /// \brief The OpenCL extension settings.
   SmallVector<uint64_t, 1> OpenCLExtensions;
 
@@ -829,6 +842,9 @@ private:
 
   /// \brief Whether we have tried loading the global module index yet.
   bool TriedLoadingGlobalIndex;
+
+  ///\brief Whether we are currently processing update records.
+  bool ProcessingUpdateRecords;
 
   typedef llvm::DenseMap<unsigned, SwitchCase *> SwitchCaseMapTy;
   /// \brief Mapping from switch-case IDs in the chain to switch-case statements
@@ -1029,6 +1045,23 @@ private:
     ~ReadingKindTracker() { Reader.ReadingKind = PrevKind; }
   };
 
+  /// \brief RAII object to mark the start of processing updates.
+  class ProcessingUpdatesRAIIObj {
+    ASTReader &Reader;
+    bool PrevState;
+
+    ProcessingUpdatesRAIIObj(const ProcessingUpdatesRAIIObj &) = delete;
+    void operator=(const ProcessingUpdatesRAIIObj &) = delete;
+
+  public:
+    ProcessingUpdatesRAIIObj(ASTReader &reader)
+      : Reader(reader), PrevState(Reader.ProcessingUpdateRecords) {
+      Reader.ProcessingUpdateRecords = true;
+    }
+
+    ~ProcessingUpdatesRAIIObj() { Reader.ProcessingUpdateRecords = PrevState; }
+  };
+
   /// \brief Suggested contents of the predefines buffer, after this
   /// PCH file has been processed.
   ///
@@ -1047,6 +1080,7 @@ private:
     off_t StoredSize;
     time_t StoredTime;
     bool Overridden;
+    bool Transient;
   };
 
   /// \brief Reads the stored information about an input file.
@@ -1122,6 +1156,7 @@ private:
       bool AllowCompatibleConfigurationMismatch, ASTReaderListener &Listener,
       std::string &SuggestedPredefines);
   ASTReadResult ReadASTBlock(ModuleFile &F, unsigned ClientLoadCapabilities);
+  ASTReadResult ReadExtensionBlock(ModuleFile &F);
   bool ParseLineTable(ModuleFile &F, const RecordData &Record);
   bool ReadSourceManagerBlock(ModuleFile &F);
   llvm::BitstreamCursor &SLocCursorForID(int ID);
@@ -1170,7 +1205,7 @@ private:
   Decl *getMostRecentExistingDecl(Decl *D);
 
   RecordLocation DeclCursorForID(serialization::DeclID ID,
-                                 unsigned &RawLocation);
+                                 SourceLocation &Location);
   void loadDeclUpdateRecords(serialization::DeclID ID, Decl *D);
   void loadPendingDeclChain(Decl *D, uint64_t LocalOffset);
   void loadObjCCategories(serialization::GlobalDeclID ID, ObjCInterfaceDecl *D,
@@ -1273,6 +1308,9 @@ public:
   /// \param PCHContainerRdr the PCHContainerOperations to use for loading and
   /// creating modules.
   ///
+  /// \param Extensions the list of module file extensions that can be loaded
+  /// from the AST files.
+  ///
   /// \param isysroot If non-NULL, the system include path specified by the
   /// user. This is only used with relocatable PCH files. If non-NULL,
   /// a relocatable PCH file will use the default path "/".
@@ -1299,6 +1337,7 @@ public:
   /// deserializing.
   ASTReader(Preprocessor &PP, ASTContext &Context,
             const PCHContainerReader &PCHContainerRdr,
+            ArrayRef<IntrusiveRefCntPtr<ModuleFileExtension>> Extensions,
             StringRef isysroot = "", bool DisableValidation = false,
             bool AllowASTWithCompilerErrors = false,
             bool AllowConfigurationMismatch = false,
@@ -1309,6 +1348,7 @@ public:
 
   SourceManager &getSourceManager() const { return SourceMgr; }
   FileManager &getFileManager() const { return FileMgr; }
+  DiagnosticsEngine &getDiags() const { return Diags; }
 
   /// \brief Flags that indicate what kind of AST loading failures the client
   /// of the AST reader can directly handle.
@@ -1346,7 +1386,7 @@ public:
   /// \param ClientLoadCapabilities The set of client load-failure
   /// capabilities, represented as a bitset of the enumerators of
   /// LoadFailureCapabilities.
-  ASTReadResult ReadAST(const std::string &FileName, ModuleKind Type,
+  ASTReadResult ReadAST(StringRef FileName, ModuleKind Type,
                         SourceLocation ImportLoc,
                         unsigned ClientLoadCapabilities);
 
@@ -1476,6 +1516,7 @@ public:
   static bool
   readASTFileControlBlock(StringRef Filename, FileManager &FileMgr,
                           const PCHContainerReader &PCHContainerRdr,
+                          bool FindModuleFileExtensions,
                           ASTReaderListener &Listener);
 
   /// \brief Determine whether the given AST file is acceptable to load into a
@@ -1676,11 +1717,6 @@ public:
   /// redeclaration chain for \p D.
   void CompleteRedeclChain(const Decl *D) override;
 
-  /// \brief Read a CXXBaseSpecifiers ID form the given record and
-  /// return its global bit offset.
-  uint64_t readCXXBaseSpecifiers(ModuleFile &M, const RecordData &Record,
-                                 unsigned &Idx);
-
   CXXBaseSpecifier *GetExternalCXXBaseSpecifiers(uint64_t Offset) override;
 
   /// \brief Resolve the offset of a statement into a statement.
@@ -1775,13 +1811,17 @@ public:
   /// selector.
   void ReadMethodPool(Selector Sel) override;
 
+  /// Load the contents of the global method pool for a given
+  /// selector if necessary.
+  void updateOutOfDateSelector(Selector Sel) override;
+
   /// \brief Load the set of namespaces that are known to the external source,
   /// which will be used during typo correction.
   void ReadKnownNamespaces(
                          SmallVectorImpl<NamespaceDecl *> &Namespaces) override;
 
   void ReadUndefinedButUsed(
-               llvm::DenseMap<NamedDecl *, SourceLocation> &Undefined) override;
+      llvm::MapVector<NamedDecl *, SourceLocation> &Undefined) override;
 
   void ReadMismatchingDeleteExpressions(llvm::MapVector<
       FieldDecl *, llvm::SmallVector<std::pair<SourceLocation, bool>, 4>> &
@@ -1960,18 +2000,27 @@ public:
   ReadCXXCtorInitializers(ModuleFile &F, const RecordData &Record,
                           unsigned &Idx);
 
-  /// \brief Read a CXXCtorInitializers ID from the given record and
-  /// return its global bit offset.
-  uint64_t ReadCXXCtorInitializersRef(ModuleFile &M, const RecordData &Record,
-                                      unsigned &Idx);
-
   /// \brief Read the contents of a CXXCtorInitializer array.
   CXXCtorInitializer **GetExternalCXXCtorInitializers(uint64_t Offset) override;
 
+  /// \brief Read a source location from raw form and return it in its
+  /// originating module file's source location space.
+  SourceLocation ReadUntranslatedSourceLocation(uint32_t Raw) const {
+    return SourceLocation::getFromRawEncoding((Raw >> 1) | (Raw << 31));
+  }
+
   /// \brief Read a source location from raw form.
-  SourceLocation ReadSourceLocation(ModuleFile &ModuleFile, unsigned Raw) const {
-    SourceLocation Loc = SourceLocation::getFromRawEncoding(Raw);
-    assert(ModuleFile.SLocRemap.find(Loc.getOffset()) != ModuleFile.SLocRemap.end() &&
+  SourceLocation ReadSourceLocation(ModuleFile &ModuleFile, uint32_t Raw) const {
+    SourceLocation Loc = ReadUntranslatedSourceLocation(Raw);
+    return TranslateSourceLocation(ModuleFile, Loc);
+  }
+
+  /// \brief Translate a source location from another module file's source
+  /// location space into ours.
+  SourceLocation TranslateSourceLocation(ModuleFile &ModuleFile,
+                                         SourceLocation Loc) const {
+    assert(ModuleFile.SLocRemap.find(Loc.getOffset()) !=
+               ModuleFile.SLocRemap.end() &&
            "Cannot find offset to remap.");
     int Remap = ModuleFile.SLocRemap.find(Loc.getOffset())->second;
     return Loc.getLocWithOffset(Remap);
@@ -2077,6 +2126,11 @@ public:
   /// imported.
   Sema *getSema() { return SemaObj; }
 
+  /// \brief Get the identifier resolver used for name lookup / updates
+  /// in the translation unit scope. We have one of these even if we don't
+  /// have a Sema object.
+  IdentifierResolver &getIdResolver();
+
   /// \brief Retrieve the identifier table associated with the
   /// preprocessor.
   IdentifierTable &getIdentifierTable();
@@ -2096,6 +2150,8 @@ public:
 
   /// \brief Loads comments ranges.
   void ReadComments() override;
+
+  bool isProcessingUpdateRecords() { return ProcessingUpdateRecords; }
 };
 
 /// \brief Helper class that saves the current stream position and

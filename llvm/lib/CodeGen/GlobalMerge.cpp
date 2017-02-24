@@ -59,7 +59,6 @@
 // We use heuristics to discover the best global grouping we can (cf cl::opts).
 // ===---------------------------------------------------------------------===//
 
-#include "llvm/Transforms/Scalar.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -91,6 +90,11 @@ static cl::opt<bool>
 EnableGlobalMerge("enable-global-merge", cl::Hidden,
                   cl::desc("Enable the global merge pass"),
                   cl::init(true));
+
+static cl::opt<unsigned>
+GlobalMergeMaxOffset("global-merge-max-offset", cl::Hidden,
+                     cl::desc("Set maximum offset for global merge pass"),
+                     cl::init(0));
 
 static cl::opt<bool> GlobalMergeGroupByUse(
     "global-merge-group-by-use", cl::Hidden,
@@ -131,6 +135,8 @@ namespace {
     /// Whether we should merge global variables that have external linkage.
     bool MergeExternalGlobals;
 
+    bool IsMachO;
+
     bool doMerge(SmallVectorImpl<GlobalVariable*> &Globals,
                  Module &M, bool isConst, unsigned AddrSpace) const;
     /// \brief Merge everything in \p Globals for which the corresponding bit
@@ -158,10 +164,14 @@ namespace {
 
   public:
     static char ID;             // Pass identification, replacement for typeid.
-    explicit GlobalMerge(const TargetMachine *TM = nullptr,
-                         unsigned MaximalOffset = 0,
-                         bool OnlyOptimizeForSize = false,
-                         bool MergeExternalGlobals = false)
+    explicit GlobalMerge()
+        : FunctionPass(ID), TM(nullptr), MaxOffset(GlobalMergeMaxOffset),
+          OnlyOptimizeForSize(false), MergeExternalGlobals(false) {
+      initializeGlobalMergePass(*PassRegistry::getPassRegistry());
+    }
+
+    explicit GlobalMerge(const TargetMachine *TM, unsigned MaximalOffset,
+                         bool OnlyOptimizeForSize, bool MergeExternalGlobals)
         : FunctionPass(ID), TM(TM), MaxOffset(MaximalOffset),
           OnlyOptimizeForSize(OnlyOptimizeForSize),
           MergeExternalGlobals(MergeExternalGlobals) {
@@ -459,8 +469,7 @@ bool GlobalMerge::doMerge(const SmallVectorImpl<GlobalVariable *> &Globals,
       // we can also emit an alias for internal linkage as it's safe to do so.
       // It's not safe on Mach-O as the alias (and thus the portion of the
       // MergedGlobals variable) may be dead stripped at link time.
-      if (Linkage != GlobalValue::InternalLinkage ||
-          !TM->getTargetTriple().isOSBinFormatMachO()) {
+      if (Linkage != GlobalValue::InternalLinkage || !IsMachO) {
         GlobalAlias::create(Tys[idx], AddrSpace, Linkage, Name, GEP, &M);
       }
 
@@ -513,6 +522,8 @@ bool GlobalMerge::doInitialization(Module &M) {
   if (!EnableGlobalMerge)
     return false;
 
+  IsMachO = Triple(M.getTargetTriple()).isOSBinFormatMachO();
+
   auto &DL = M.getDataLayout();
   DenseMap<unsigned, SmallVector<GlobalVariable*, 16> > Globals, ConstGlobals,
                                                         BSSGlobals;
@@ -520,43 +531,43 @@ bool GlobalMerge::doInitialization(Module &M) {
   setMustKeepGlobalVariables(M);
 
   // Grab all non-const globals.
-  for (Module::global_iterator I = M.global_begin(),
-         E = M.global_end(); I != E; ++I) {
+  for (auto &GV : M.globals()) {
     // Merge is safe for "normal" internal or external globals only
-    if (I->isDeclaration() || I->isThreadLocal() || I->hasSection())
+    if (GV.isDeclaration() || GV.isThreadLocal() || GV.hasSection())
       continue;
 
-    if (!(MergeExternalGlobals && I->hasExternalLinkage()) &&
-        !I->hasInternalLinkage())
+    if (!(MergeExternalGlobals && GV.hasExternalLinkage()) &&
+        !GV.hasInternalLinkage())
       continue;
 
-    PointerType *PT = dyn_cast<PointerType>(I->getType());
+    PointerType *PT = dyn_cast<PointerType>(GV.getType());
     assert(PT && "Global variable is not a pointer!");
 
     unsigned AddressSpace = PT->getAddressSpace();
 
     // Ignore fancy-aligned globals for now.
-    unsigned Alignment = DL.getPreferredAlignment(I);
-    Type *Ty = I->getValueType();
+    unsigned Alignment = DL.getPreferredAlignment(&GV);
+    Type *Ty = GV.getValueType();
     if (Alignment > DL.getABITypeAlignment(Ty))
       continue;
 
     // Ignore all 'special' globals.
-    if (I->getName().startswith("llvm.") ||
-        I->getName().startswith(".llvm."))
+    if (GV.getName().startswith("llvm.") ||
+        GV.getName().startswith(".llvm."))
       continue;
 
     // Ignore all "required" globals:
-    if (isMustKeepGlobalVariable(I))
+    if (isMustKeepGlobalVariable(&GV))
       continue;
 
     if (DL.getTypeAllocSize(Ty) < MaxOffset) {
-      if (TargetLoweringObjectFile::getKindForGlobal(I, *TM).isBSSLocal())
-        BSSGlobals[AddressSpace].push_back(I);
-      else if (I->isConstant())
-        ConstGlobals[AddressSpace].push_back(I);
+      if (TM &&
+          TargetLoweringObjectFile::getKindForGlobal(&GV, *TM).isBSSLocal())
+        BSSGlobals[AddressSpace].push_back(&GV);
+      else if (GV.isConstant())
+        ConstGlobals[AddressSpace].push_back(&GV);
       else
-        Globals[AddressSpace].push_back(I);
+        Globals[AddressSpace].push_back(&GV);
     }
   }
 

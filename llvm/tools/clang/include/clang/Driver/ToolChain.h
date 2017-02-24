@@ -11,6 +11,7 @@
 #define LLVM_CLANG_DRIVER_TOOLCHAIN_H
 
 #include "clang/Basic/Sanitizers.h"
+#include "clang/Basic/VersionTuple.h"
 #include "clang/Driver/Action.h"
 #include "clang/Driver/Multilib.h"
 #include "clang/Driver/Types.h"
@@ -18,6 +19,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Target/TargetOptions.h"
 #include <memory>
 #include <string>
 
@@ -30,7 +32,10 @@ namespace opt {
 }
 
 namespace clang {
-  class ObjCRuntime;
+class ObjCRuntime;
+namespace vfs {
+class FileSystem;
+}
 
 namespace driver {
   class Compilation;
@@ -89,6 +94,7 @@ private:
 
 protected:
   MultilibSet Multilibs;
+  const char *DefaultLinker = "ld";
 
   ToolChain(const Driver &D, const llvm::Triple &T,
             const llvm::opt::ArgList &Args);
@@ -119,7 +125,8 @@ public:
 
   // Accessors
 
-  const Driver &getDriver() const;
+  const Driver &getDriver() const { return D; }
+  vfs::FileSystem &getVFS() const;
   const llvm::Triple &getTriple() const { return Triple; }
 
   llvm::Triple::ArchType getArch() const { return Triple.getArch(); }
@@ -128,7 +135,7 @@ public:
   StringRef getOS() const { return Triple.getOSName(); }
 
   /// \brief Provide the default architecture name (as expected by -arch) for
-  /// this toolchain. Note t
+  /// this toolchain.
   StringRef getDefaultUniversalArchName() const;
 
   std::string getTripleString() const {
@@ -181,7 +188,7 @@ public:
   /// Choose a tool to use to handle the action \p JA.
   ///
   /// This can be overridden when a particular ToolChain needs to use
-  /// a C compiler other than Clang.
+  /// a compiler other than Clang.
   virtual Tool *SelectTool(const JobAction &JA) const;
 
   // Helper methods
@@ -222,7 +229,7 @@ public:
   virtual bool IsIntegratedAssemblerDefault() const { return false; }
 
   /// \brief Check if the toolchain should use the integrated assembler.
-  bool useIntegratedAs() const;
+  virtual bool useIntegratedAs() const;
 
   /// IsMathErrnoDefault - Does this tool chain use -fmath-errno by default.
   virtual bool IsMathErrnoDefault() const { return true; }
@@ -249,6 +256,20 @@ public:
   virtual RuntimeLibType GetDefaultRuntimeLibType() const {
     return ToolChain::RLT_Libgcc;
   }
+
+  virtual CXXStdlibType GetDefaultCXXStdlibType() const {
+    return ToolChain::CST_Libstdcxx;
+  }
+
+  virtual std::string getCompilerRT(const llvm::opt::ArgList &Args,
+                                    StringRef Component,
+                                    bool Shared = false) const;
+
+  const char *getCompilerRTArgString(const llvm::opt::ArgList &Args,
+                                     StringRef Component,
+                                     bool Shared = false) const;
+  /// needsProfileRT - returns true if instrumentation profile is on.
+  static bool needsProfileRT(const llvm::opt::ArgList &Args);
 
   /// IsUnwindTablesDefault - Does this tool chain use -funwind-tables
   /// by default.
@@ -279,8 +300,30 @@ public:
   /// compile unit information.
   virtual bool UseDwarfDebugFlags() const { return false; }
 
+  // Return the DWARF version to emit, in the absence of arguments
+  // to the contrary.
+  virtual unsigned GetDefaultDwarfVersion() const { return 4; }
+
+  // True if the driver should assume "-fstandalone-debug"
+  // in the absence of an option specifying otherwise,
+  // provided that debugging was requested in the first place.
+  // i.e. a value of 'true' does not imply that debugging is wanted.
+  virtual bool GetDefaultStandaloneDebug() const { return false; }
+
+  // Return the default debugger "tuning."
+  virtual llvm::DebuggerKind getDefaultDebuggerTuning() const {
+    return llvm::DebuggerKind::GDB;
+  }
+
   /// UseSjLjExceptions - Does this tool chain use SjLj exceptions.
-  virtual bool UseSjLjExceptions() const { return false; }
+  virtual bool UseSjLjExceptions(const llvm::opt::ArgList &Args) const {
+    return false;
+  }
+
+  /// SupportsEmbeddedBitcode - Does this tool chain support embedded bitcode.
+  virtual bool SupportsEmbeddedBitcode() const {
+    return false;
+  }
 
   /// getThreadModel() - Which thread model does this target use?
   virtual std::string getThreadModel() const { return "posix"; }
@@ -351,6 +394,10 @@ public:
   virtual void AddCXXStdlibLibArgs(const llvm::opt::ArgList &Args,
                                    llvm::opt::ArgStringList &CmdArgs) const;
 
+  /// AddFilePathLibArgs - Add each thing in getFilePaths() as a "-L" option.
+  void AddFilePathLibArgs(const llvm::opt::ArgList &Args,
+                          llvm::opt::ArgStringList &CmdArgs) const;
+
   /// AddCCKextLibArgs - Add the system specific linker arguments to use
   /// for kernel extensions (Darwin-specific).
   virtual void AddCCKextLibArgs(const llvm::opt::ArgList &Args,
@@ -360,12 +407,30 @@ public:
   /// global flags for unsafe floating point math, add it and return true.
   ///
   /// This checks for presence of the -Ofast, -ffast-math or -funsafe-math flags.
-  virtual bool
-  AddFastMathRuntimeIfAvailable(const llvm::opt::ArgList &Args,
+  virtual bool AddFastMathRuntimeIfAvailable(
+      const llvm::opt::ArgList &Args, llvm::opt::ArgStringList &CmdArgs) const;
+  /// addProfileRTLibs - When -fprofile-instr-profile is specified, try to pass
+  /// a suitable profile runtime library to the linker.
+  virtual void addProfileRTLibs(const llvm::opt::ArgList &Args,
                                 llvm::opt::ArgStringList &CmdArgs) const;
+
+  /// \brief Add arguments to use system-specific CUDA includes.
+  virtual void AddCudaIncludeArgs(const llvm::opt::ArgList &DriverArgs,
+                                  llvm::opt::ArgStringList &CC1Args) const;
+
+  /// \brief Add arguments to use MCU GCC toolchain includes.
+  virtual void AddIAMCUIncludeArgs(const llvm::opt::ArgList &DriverArgs,
+                                   llvm::opt::ArgStringList &CC1Args) const;
 
   /// \brief Return sanitizers which are available in this toolchain.
   virtual SanitizerMask getSupportedSanitizers() const;
+
+  /// \brief Return sanitizers which are enabled by default.
+  virtual SanitizerMask getDefaultSanitizers() const { return 0; }
+
+  /// \brief On Windows, returns the version of cl.exe.  On other platforms,
+  /// returns an empty VersionTuple.
+  virtual VersionTuple getMSVCVersionFromExe() const { return VersionTuple(); }
 };
 
 } // end namespace driver

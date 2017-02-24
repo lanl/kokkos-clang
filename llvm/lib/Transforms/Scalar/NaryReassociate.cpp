@@ -188,7 +188,7 @@ private:
   //     foo(a + b);
   //   if (p2)
   //     bar(a + b);
-  DenseMap<const SCEV *, SmallVector<Instruction *, 2>> SeenExprs;
+  DenseMap<const SCEV *, SmallVector<WeakVH, 2>> SeenExprs;
 };
 } // anonymous namespace
 
@@ -208,7 +208,7 @@ FunctionPass *llvm::createNaryReassociatePass() {
 }
 
 bool NaryReassociate::runOnFunction(Function &F) {
-  if (skipOptnoneFunction(F))
+  if (skipFunction(F))
     return false;
 
   AC = &getAnalysis<AssumptionCacheTracker>().getAssumptionCache(F);
@@ -246,19 +246,21 @@ bool NaryReassociate::doOneIteration(Function &F) {
        Node != GraphTraits<DominatorTree *>::nodes_end(DT); ++Node) {
     BasicBlock *BB = Node->getBlock();
     for (auto I = BB->begin(); I != BB->end(); ++I) {
-      if (SE->isSCEVable(I->getType()) && isPotentiallyNaryReassociable(I)) {
-        const SCEV *OldSCEV = SE->getSCEV(I);
-        if (Instruction *NewI = tryReassociate(I)) {
+      if (SE->isSCEVable(I->getType()) && isPotentiallyNaryReassociable(&*I)) {
+        const SCEV *OldSCEV = SE->getSCEV(&*I);
+        if (Instruction *NewI = tryReassociate(&*I)) {
           Changed = true;
-          SE->forgetValue(I);
+          SE->forgetValue(&*I);
           I->replaceAllUsesWith(NewI);
-          RecursivelyDeleteTriviallyDeadInstructions(I, TLI);
-          I = NewI;
+          // If SeenExprs constains I's WeakVH, that entry will be replaced with
+          // nullptr.
+          RecursivelyDeleteTriviallyDeadInstructions(&*I, TLI);
+          I = NewI->getIterator();
         }
         // Add the rewritten instruction to SeenExprs; the original instruction
         // is deleted.
-        const SCEV *NewSCEV = SE->getSCEV(I);
-        SeenExprs[NewSCEV].push_back(I);
+        const SCEV *NewSCEV = SE->getSCEV(&*I);
+        SeenExprs[NewSCEV].push_back(WeakVH(&*I));
         // Ideally, NewSCEV should equal OldSCEV because tryReassociate(I)
         // is equivalent to I. However, ScalarEvolution::getSCEV may
         // weaken nsw causing NewSCEV not to equal OldSCEV. For example, suppose
@@ -278,7 +280,7 @@ bool NaryReassociate::doOneIteration(Function &F) {
         //
         // This improvement is exercised in @reassociate_gep_nsw in nary-gep.ll.
         if (NewSCEV != OldSCEV)
-          SeenExprs[OldSCEV].push_back(I);
+          SeenExprs[OldSCEV].push_back(WeakVH(&*I));
       }
     }
   }
@@ -297,49 +299,18 @@ Instruction *NaryReassociate::tryReassociate(Instruction *I) {
   }
 }
 
-// FIXME: extract this method into TTI->getGEPCost.
 static bool isGEPFoldable(GetElementPtrInst *GEP,
-                          const TargetTransformInfo *TTI,
-                          const DataLayout *DL) {
-  GlobalVariable *BaseGV = nullptr;
-  int64_t BaseOffset = 0;
-  bool HasBaseReg = false;
-  int64_t Scale = 0;
-
-  if (GlobalVariable *GV = dyn_cast<GlobalVariable>(GEP->getPointerOperand()))
-    BaseGV = GV;
-  else
-    HasBaseReg = true;
-
-  gep_type_iterator GTI = gep_type_begin(GEP);
-  for (auto I = GEP->idx_begin(); I != GEP->idx_end(); ++I, ++GTI) {
-    if (isa<SequentialType>(*GTI)) {
-      int64_t ElementSize = DL->getTypeAllocSize(GTI.getIndexedType());
-      if (ConstantInt *ConstIdx = dyn_cast<ConstantInt>(*I)) {
-        BaseOffset += ConstIdx->getSExtValue() * ElementSize;
-      } else {
-        // Needs scale register.
-        if (Scale != 0) {
-          // No addressing mode takes two scale registers.
-          return false;
-        }
-        Scale = ElementSize;
-      }
-    } else {
-      StructType *STy = cast<StructType>(*GTI);
-      uint64_t Field = cast<ConstantInt>(*I)->getZExtValue();
-      BaseOffset += DL->getStructLayout(STy)->getElementOffset(Field);
-    }
-  }
-
-  unsigned AddrSpace = GEP->getPointerAddressSpace();
-  return TTI->isLegalAddressingMode(GEP->getType()->getElementType(), BaseGV,
-                                    BaseOffset, HasBaseReg, Scale, AddrSpace);
+                          const TargetTransformInfo *TTI) {
+  SmallVector<const Value*, 4> Indices;
+  for (auto I = GEP->idx_begin(); I != GEP->idx_end(); ++I)
+    Indices.push_back(*I);
+  return TTI->getGEPCost(GEP->getSourceElementType(), GEP->getPointerOperand(),
+                         Indices) == TargetTransformInfo::TCC_Free;
 }
 
 Instruction *NaryReassociate::tryReassociateGEP(GetElementPtrInst *GEP) {
   // Not worth reassociating GEP if it is foldable.
-  if (isGEPFoldable(GEP, TTI, DL))
+  if (isGEPFoldable(GEP, TTI))
     return nullptr;
 
   gep_type_iterator GTI = gep_type_begin(*GEP);
@@ -419,19 +390,20 @@ GetElementPtrInst *NaryReassociate::tryReassociateGEPAtIndex(
       GEP->getSourceElementType(), SE->getSCEV(GEP->getPointerOperand()),
       IndexExprs, GEP->isInBounds());
 
-  auto *Candidate = findClosestMatchingDominator(CandidateExpr, GEP);
+  Value *Candidate = findClosestMatchingDominator(CandidateExpr, GEP);
   if (Candidate == nullptr)
     return nullptr;
 
-  PointerType *TypeOfCandidate = dyn_cast<PointerType>(Candidate->getType());
-  // Pretty rare but theoretically possible when a numeric value happens to
-  // share CandidateExpr.
-  if (TypeOfCandidate == nullptr)
-    return nullptr;
+  IRBuilder<> Builder(GEP);
+  // Candidate does not necessarily have the same pointer type as GEP. Use
+  // bitcast or pointer cast to make sure they have the same type, so that the
+  // later RAUW doesn't complain.
+  Candidate = Builder.CreateBitOrPointerCast(Candidate, GEP->getType());
+  assert(Candidate->getType() == GEP->getType());
 
   // NewGEP = (char *)Candidate + RHS * sizeof(IndexedType)
   uint64_t IndexedSize = DL->getTypeAllocSize(IndexedType);
-  Type *ElementType = TypeOfCandidate->getElementType();
+  Type *ElementType = GEP->getResultElementType();
   uint64_t ElementSize = DL->getTypeAllocSize(ElementType);
   // Another less rare case: because I is not necessarily the last index of the
   // GEP, the size of the type at the I-th index (IndexedSize) is not
@@ -451,8 +423,7 @@ GetElementPtrInst *NaryReassociate::tryReassociateGEPAtIndex(
     return nullptr;
 
   // NewGEP = &Candidate[RHS * (sizeof(IndexedType) / sizeof(Candidate[0])));
-  IRBuilder<> Builder(GEP);
-  Type *IntPtrTy = DL->getIntPtrType(TypeOfCandidate);
+  Type *IntPtrTy = DL->getIntPtrType(GEP->getType());
   if (RHS->getType() != IntPtrTy)
     RHS = Builder.CreateSExtOrTrunc(RHS, IntPtrTy);
   if (IndexedSize != ElementSize) {
@@ -562,9 +533,13 @@ NaryReassociate::findClosestMatchingDominator(const SCEV *CandidateExpr,
   // future instruction either. Therefore, we pop it out of the stack. This
   // optimization makes the algorithm O(n).
   while (!Candidates.empty()) {
-    Instruction *Candidate = Candidates.back();
-    if (DT->dominates(Candidate, Dominatee))
-      return Candidate;
+    // Candidates stores WeakVHs, so a candidate can be nullptr if it's removed
+    // during rewriting.
+    if (Value *Candidate = Candidates.back()) {
+      Instruction *CandidateInstruction = cast<Instruction>(Candidate);
+      if (DT->dominates(CandidateInstruction, Dominatee))
+        return CandidateInstruction;
+    }
     Candidates.pop_back();
   }
   return nullptr;

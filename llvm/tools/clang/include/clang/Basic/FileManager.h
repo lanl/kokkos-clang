@@ -52,6 +52,7 @@ public:
 /// descriptor for the file.
 class FileEntry {
   const char *Name;           // Name of the file.
+  std::string RealPathName;   // Real path to the file; could be empty.
   off_t Size;                 // File size in bytes.
   time_t ModTime;             // Modification time of file.
   const DirectoryEntry *Dir;  // Directory file lives in.
@@ -82,6 +83,7 @@ public:
   }
 
   const char *getName() const { return Name; }
+  StringRef tryGetRealPathName() const { return RealPathName; }
   bool isValid() const { return IsValid; }
   off_t getSize() const { return Size; }
   unsigned getUID() const { return UID; }
@@ -126,9 +128,9 @@ class FileManager : public RefCountedBase<FileManager> {
   ///
   /// For each virtual file (e.g. foo/bar/baz.cpp), we add all of its parent
   /// directories (foo/ and foo/bar/) here.
-  SmallVector<DirectoryEntry*, 4> VirtualDirectoryEntries;
+  SmallVector<std::unique_ptr<DirectoryEntry>, 4> VirtualDirectoryEntries;
   /// \brief The virtual files that we have allocated.
-  SmallVector<FileEntry*, 4> VirtualFileEntries;
+  SmallVector<std::unique_ptr<FileEntry>, 4> VirtualFileEntries;
 
   /// \brief A cache that maps paths to directory entries (either real or
   /// virtual) we have looked up
@@ -272,9 +274,6 @@ public:
   /// FileEntry. Use with caution.
   static void modifyFileEntry(FileEntry *File, off_t Size,
                               time_t ModificationTime);
-
-  /// \brief Remove any './' components from a path.
-  static bool removeDotPaths(SmallVectorImpl<char> &Path, bool RemoveDotDot = false);
 
   /// \brief Retrieve the canonical name for a given directory.
   ///

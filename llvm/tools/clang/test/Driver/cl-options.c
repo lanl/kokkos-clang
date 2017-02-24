@@ -14,9 +14,14 @@
 // C_P: "-E"
 // C_P: "-C"
 
-// RUN: %clang_cl /Dfoo=bar -### -- %s 2>&1 | FileCheck -check-prefix=D %s
-// RUN: %clang_cl /D foo=bar -### -- %s 2>&1 | FileCheck -check-prefix=D %s
+// RUN: %clang_cl /Dfoo=bar /D bar=baz /DMYDEF#value /DMYDEF2=foo#bar /DMYDEF3#a=b /DMYDEF4# \
+// RUN:    -### -- %s 2>&1 | FileCheck -check-prefix=D %s
 // D: "-D" "foo=bar"
+// D: "-D" "bar=baz"
+// D: "-D" "MYDEF=value"
+// D: "-D" "MYDEF2=foo#bar"
+// D: "-D" "MYDEF3=a=b"
+// D: "-D" "MYDEF4="
 
 // RUN: %clang_cl /E -### -- %s 2>&1 | FileCheck -check-prefix=E %s
 // E: "-E"
@@ -54,6 +59,16 @@
 // RUN: %clang_cl /GR- -### -- %s 2>&1 | FileCheck -check-prefix=GR_ %s
 // GR_: -fno-rtti
 
+// Security Buffer Check is on by default.
+// RUN: %clang_cl -### -- %s 2>&1 | FileCheck -check-prefix=GS-default %s
+// GS-default: "-stack-protector" "2"
+
+// RUN: %clang_cl /GS -### -- %s 2>&1 | FileCheck -check-prefix=GS %s
+// GS: "-stack-protector" "2"
+
+// RUN: %clang_cl /GS- -### -- %s 2>&1 | FileCheck -check-prefix=GS_ %s
+// GS_-NOT: -stack-protector
+
 // RUN: %clang_cl /Gy -### -- %s 2>&1 | FileCheck -check-prefix=Gy %s
 // Gy: -ffunction-sections
 
@@ -77,6 +92,12 @@
 // RUN: %clang_cl /I myincludedir -### -- %s 2>&1 | FileCheck -check-prefix=SLASH_I %s
 // SLASH_I: "-I" "myincludedir"
 
+// RUN: %clang_cl /imsvcmyincludedir -### -- %s 2>&1 | FileCheck -check-prefix=SLASH_imsvc %s
+// RUN: %clang_cl /imsvc myincludedir -### -- %s 2>&1 | FileCheck -check-prefix=SLASH_imsvc %s
+// Clang's resource header directory should be first:
+// SLASH_imsvc: "-internal-isystem" "{{[^"]*}}lib{{(64)?/|\\\\}}clang{{[^"]*}}include"
+// SLASH_imsvc: "-internal-isystem" "myincludedir"
+
 // RUN: %clang_cl /J -### -- %s 2>&1 | FileCheck -check-prefix=J %s
 // J: -fno-signed-char
 
@@ -85,6 +106,16 @@
 
 // RUN: %clang_cl /Ob0 -### -- %s 2>&1 | FileCheck -check-prefix=Ob0 %s
 // Ob0: -fno-inline
+
+// RUN: %clang_cl /Ob2 -### -- %s 2>&1 | FileCheck -check-prefix=Ob2 %s
+// RUN: %clang_cl /Odb2 -### -- %s 2>&1 | FileCheck -check-prefix=Ob2 %s
+// RUN: %clang_cl /O2 /Ob2 -### -- %s 2>&1 | FileCheck -check-prefix=Ob2 %s
+// Ob2-NOT: warning: argument unused during compilation: '/O2'
+// Ob2: -finline-functions
+
+// RUN: %clang_cl /Ob1 -### -- %s 2>&1 | FileCheck -check-prefix=Ob1 %s
+// RUN: %clang_cl /Odb1 -### -- %s 2>&1 | FileCheck -check-prefix=Ob1 %s
+// Ob1: -finline-hint-functions
 
 // RUN: %clang_cl /Od -### -- %s 2>&1 | FileCheck -check-prefix=Od %s
 // Od: -O0
@@ -95,17 +126,20 @@
 // RUN: %clang_cl /Oi- -### -- %s 2>&1 | FileCheck -check-prefix=Oi_ %s
 // Oi_: -fno-builtin
 
-// RUN: %clang_cl /Os -### -- %s 2>&1 | FileCheck -check-prefix=Os %s
+// RUN: %clang_cl /Os --target=i686-pc-windows-msvc -### -- %s 2>&1 | FileCheck -check-prefix=Os %s
+// RUN: %clang_cl /Os --target=x86_64-pc-windows-msvc -### -- %s 2>&1 | FileCheck -check-prefix=Os %s
 // Os-NOT: -mdisable-fp-elim
 // Os: -momit-leaf-frame-pointer
 // Os: -Os
 
-// RUN: %clang_cl /Ot -### -- %s 2>&1 | FileCheck -check-prefix=Ot %s
+// RUN: %clang_cl /Ot --target=i686-pc-windows-msvc -### -- %s 2>&1 | FileCheck -check-prefix=Ot %s
+// RUN: %clang_cl /Ot --target=x86_64-pc-windows-msvc -### -- %s 2>&1 | FileCheck -check-prefix=Ot %s
 // Ot-NOT: -mdisable-fp-elim
 // Ot: -momit-leaf-frame-pointer
 // Ot: -O2
 
-// RUN: %clang_cl /Ox -### -- %s 2>&1 | FileCheck -check-prefix=Ox %s
+// RUN: %clang_cl /Ox --target=i686-pc-windows-msvc -### -- %s 2>&1 | FileCheck -check-prefix=Ox %s
+// RUN: %clang_cl /Ox --target=x86_64-pc-windows-msvc -### -- %s 2>&1 | FileCheck -check-prefix=Ox %s
 // Ox-NOT: -mdisable-fp-elim
 // Ox: -momit-leaf-frame-pointer
 // Ox: -O2
@@ -115,9 +149,13 @@
 // PR24003: -momit-leaf-frame-pointer
 // PR24003: -Os
 
-// RUN: %clang_cl /Zs /Oy -- %s 2>&1
+// RUN: %clang_cl --target=i686-pc-win32 -Werror /Oy- /O2 -### -- %s 2>&1 | FileCheck -check-prefix=Oy_2 %s
+// Oy_2: -momit-leaf-frame-pointer
+// Oy_2: -O2
 
-// RUN: %clang_cl --target=i686-pc-win32 /Oy- -### -- %s 2>&1 | FileCheck -check-prefix=Oy_ %s
+// RUN: %clang_cl /Zs -Werror /Oy -- %s 2>&1
+
+// RUN: %clang_cl --target=i686-pc-win32 -Werror /Oy- -### -- %s 2>&1 | FileCheck -check-prefix=Oy_ %s
 // Oy_: -mdisable-fp-elim
 
 // RUN: %clang_cl /Qvec -### -- %s 2>&1 | FileCheck -check-prefix=Qvec %s
@@ -170,9 +208,10 @@
 // RUN: %clang_cl /W1 -### -- %s 2>&1 | FileCheck -check-prefix=W1 %s
 // RUN: %clang_cl /W2 -### -- %s 2>&1 | FileCheck -check-prefix=W1 %s
 // RUN: %clang_cl /W3 -### -- %s 2>&1 | FileCheck -check-prefix=W1 %s
-// RUN: %clang_cl /W4 -### -- %s 2>&1 | FileCheck -check-prefix=W1 %s
-// RUN: %clang_cl /Wall -### -- %s 2>&1 | FileCheck -check-prefix=W1 %s
+// RUN: %clang_cl /W4 -### -- %s 2>&1 | FileCheck -check-prefix=W4 %s
+// RUN: %clang_cl /Wall -### -- %s 2>&1 | FileCheck -check-prefix=W4 %s
 // W1: -Wall
+// W4: -WCL4
 
 // RUN: %clang_cl /WX -### -- %s 2>&1 | FileCheck -check-prefix=WX %s
 // WX: -Werror
@@ -198,6 +237,15 @@
 // RUN: %clang_cl /FI asdf.h -### -- %s 2>&1 | FileCheck -check-prefix=FI_ %s
 // FI_: "-include" "asdf.h"
 
+// RUN: %clang_cl /TP /c -### -- %s 2>&1 | FileCheck -check-prefix=NO-GX %s
+// NO-GX-NOT: "-fcxx-exceptions" "-fexceptions"
+
+// RUN: %clang_cl /TP /c /GX -### -- %s 2>&1 | FileCheck -check-prefix=GX %s
+// GX: "-fcxx-exceptions" "-fexceptions"
+
+// RUN: %clang_cl /TP /c /GX /GX- -### -- %s 2>&1 | FileCheck -check-prefix=GX_ %s
+// GX_-NOT: "-fcxx-exceptions" "-fexceptions"
+
 // We forward any unrecognized -W diagnostic options to cc1.
 // RUN: %clang_cl -Wunused-pragmas -### -- %s 2>&1 | FileCheck -check-prefix=WJoined %s
 // WJoined: "-cc1"
@@ -212,11 +260,12 @@
 // NOSTRICT: "-relaxed-aliasing"
 
 // For some warning ids, we can map from MSVC warning to Clang warning.
-// RUN: %clang_cl -wd4005 -wd4996 -wd4910 -### -- %s 2>&1 | FileCheck -check-prefix=Wno %s
+// RUN: %clang_cl -wd4005 -wd4100 -wd4910 -wd4996 -### -- %s 2>&1 | FileCheck -check-prefix=Wno %s
 // Wno: "-cc1"
 // Wno: "-Wno-macro-redefined"
-// Wno: "-Wno-deprecated-declarations"
+// Wno: "-Wno-unused-parameter"
 // Wno: "-Wno-dllexport-explicit-instantiation-decl"
+// Wno: "-Wno-deprecated-declarations"
 
 // Ignored options. Check that we don't get "unused during compilation" errors.
 // RUN: %clang_cl /c \
@@ -224,8 +273,10 @@
 // RUN:    /bigobj \
 // RUN:    /cgthreads4 \
 // RUN:    /cgthreads8 \
+// RUN:    /d2FastFail \
 // RUN:    /d2Zi+ \
 // RUN:    /errorReport:foo \
+// RUN:    /FC \
 // RUN:    /Fdfoo \
 // RUN:    /FS \
 // RUN:    /Gd \
@@ -233,8 +284,6 @@
 // RUN:    /GS- \
 // RUN:    /kernel- \
 // RUN:    /nologo \
-// RUN:    /Ob1 \
-// RUN:    /Ob2 \
 // RUN:    /openmp- \
 // RUN:    /RTC1 \
 // RUN:    /sdl \
@@ -298,6 +347,8 @@
 // RUN:     /Gr \
 // RUN:     /GS \
 // RUN:     /GT \
+// RUN:     /guard:cf \
+// RUN:     /guard:cf- \
 // RUN:     /GX \
 // RUN:     /Gv \
 // RUN:     /Gz \
@@ -354,7 +405,7 @@
 // RTTI-NOT: "-fno-rtti"
 
 // thread safe statics are off for versions < 19.
-// RUN: %clang_cl /c -### -- %s 2>&1 | FileCheck -check-prefix=NoThreadSafeStatics %s
+// RUN: %clang_cl /c -### -fms-compatibility-version=18 -- %s 2>&1 | FileCheck -check-prefix=NoThreadSafeStatics %s
 // RUN: %clang_cl /Zc:threadSafeInit /Zc:threadSafeInit- /c -### -- %s 2>&1 | FileCheck -check-prefix=NoThreadSafeStatics %s
 // NoThreadSafeStatics: "-fno-threadsafe-statics"
 
@@ -362,23 +413,54 @@
 // ThreadSafeStatics-NOT: "-fno-threadsafe-statics"
 
 // RUN: %clang_cl /Zi /c -### -- %s 2>&1 | FileCheck -check-prefix=Zi %s
-// Zi: "-gline-tables-only"
 // Zi: "-gcodeview"
+// Zi: "-debug-info-kind=limited"
 
 // RUN: %clang_cl /Z7 /c -### -- %s 2>&1 | FileCheck -check-prefix=Z7 %s
-// Z7: "-gline-tables-only"
 // Z7: "-gcodeview"
+// Z7: "-debug-info-kind=limited"
 
+// RUN: %clang_cl /Zd /c -### -- %s 2>&1 | FileCheck -check-prefix=Z7GMLT %s
+// Z7GMLT: "-gcodeview"
+// Z7GMLT: "-debug-info-kind=line-tables-only"
+
+// RUN: %clang_cl -gline-tables-only /c -### -- %s 2>&1 | FileCheck -check-prefix=ZGMLT %s
+// ZGMLT: "-gcodeview"
+// ZGMLT: "-debug-info-kind=line-tables-only"
+
+// RUN: %clang_cl /c -### -- %s 2>&1 | FileCheck -check-prefix=BreproDefault %s
+// BreproDefault: "-mincremental-linker-compatible"
+
+// RUN: %clang_cl /Brepro- /Brepro /c '-###' -- %s 2>&1 | FileCheck -check-prefix=Brepro %s
+// Brepro: "-mincremental-linker-compatible"
+
+// RUN: %clang_cl /Brepro /Brepro- /c '-###' -- %s 2>&1 | FileCheck -check-prefix=Brepro_ %s
+// Brepro_-NOT: "-mincremental-linker-compatible"
+
+// This test was super sneaky: "/Z7" means "line-tables", but "-gdwarf" occurs
+// later on the command line, so it should win. Interestingly the cc1 arguments
+// came out right, but had wrong semantics, because an invariant assumed by
+// CompilerInvocation was violated: it expects that at most one of {gdwarfN,
+// line-tables-only} appear. If you assume that, then you can safely use
+// Args.hasArg to test whether a boolean flag is present without caring
+// where it appeared. And for this test, it appeared to the left of -gdwarf
+// which made it "win". This test could not detect that bug.
 // RUN: %clang_cl /Z7 -gdwarf /c -### -- %s 2>&1 | FileCheck -check-prefix=Z7_gdwarf %s
-// Z7_gdwarf: "-gline-tables-only"
 // Z7_gdwarf: "-gcodeview"
-// Z7_gdwarf: "-gdwarf-4"
+// Z7_gdwarf: "-debug-info-kind=limited"
+// Z7_gdwarf: "-dwarf-version=4"
 
 // RUN: %clang_cl -fmsc-version=1800 -TP -### -- %s 2>&1 | FileCheck -check-prefix=CXX11 %s
 // CXX11: -std=c++11
 
 // RUN: %clang_cl -fmsc-version=1900 -TP -### -- %s 2>&1 | FileCheck -check-prefix=CXX14 %s
 // CXX14: -std=c++14
+
+// RUN: %clang_cl -fmsc-version=1900 -TP -std:c++14 -### -- %s 2>&1 | FileCheck -check-prefix=STDCXX14 %s
+// STDCXX14: -std=c++14
+
+// RUN: %clang_cl -fmsc-version=1900 -TP -std:c++latest -### -- %s 2>&1 | FileCheck -check-prefix=STDCXXLATEST %s
+// STDCXXLATEST: -std=c++1z
 
 // RUN: env CL="/Gy" %clang_cl -### -- %s 2>&1 | FileCheck -check-prefix=ENV-CL %s
 // ENV-CL: "-ffunction-sections"
@@ -400,7 +482,12 @@
 // RUN:     -fno-strict-aliasing \
 // RUN:     -fstrict-aliasing \
 // RUN:     -fsyntax-only \
+// RUN:     -fms-compatibility \
+// RUN:     -fno-ms-compatibility \
+// RUN:     -fms-extensions \
+// RUN:     -fno-ms-extensions \
 // RUN:     -mllvm -disable-llvm-optzns \
+// RUN:     -resource-dir \
 // RUN:     -Wunused-variable \
 // RUN:     -fmacro-backtrace-limit=0 \
 // RUN:     -Werror /Zs -- %s 2>&1

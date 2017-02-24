@@ -241,8 +241,6 @@ class HeaderSearch {
   unsigned NumMultiIncludeFileOptzn;
   unsigned NumFrameworkLookups, NumSubFrameworkLookups;
 
-  const LangOptions &LangOpts;
-
   // HeaderSearch doesn't support default or copy construction.
   HeaderSearch(const HeaderSearch&) = delete;
   void operator=(const HeaderSearch&) = delete;
@@ -382,7 +380,8 @@ public:
       const DirectoryLookup *FromDir, const DirectoryLookup *&CurDir,
       ArrayRef<std::pair<const FileEntry *, const DirectoryEntry *>> Includers,
       SmallVectorImpl<char> *SearchPath, SmallVectorImpl<char> *RelativePath,
-      ModuleMap::KnownHeader *SuggestedModule, bool SkipCache = false);
+      Module *RequestingModule, ModuleMap::KnownHeader *SuggestedModule,
+      bool SkipCache = false, bool BuildSystemModule = false);
 
   /// \brief Look up a subframework for the specified \#include file.
   ///
@@ -391,11 +390,9 @@ public:
   /// HIToolbox is a subframework within Carbon.framework.  If so, return
   /// the FileEntry for the designated file, otherwise return null.
   const FileEntry *LookupSubframeworkHeader(
-      StringRef Filename,
-      const FileEntry *RelativeFileEnt,
-      SmallVectorImpl<char> *SearchPath,
-      SmallVectorImpl<char> *RelativePath,
-      ModuleMap::KnownHeader *SuggestedModule);
+      StringRef Filename, const FileEntry *RelativeFileEnt,
+      SmallVectorImpl<char> *SearchPath, SmallVectorImpl<char> *RelativePath,
+      Module *RequestingModule, ModuleMap::KnownHeader *SuggestedModule);
 
   /// \brief Look up the specified framework name in our framework cache.
   /// \returns The DirectoryEntry it is in if we know, null otherwise.
@@ -561,6 +558,33 @@ private:
   /// of the given search directory.
   void loadSubdirectoryModuleMaps(DirectoryLookup &SearchDir);
 
+  /// \brief Find and suggest a usable module for the given file.
+  ///
+  /// \return \c true if the file can be used, \c false if we are not permitted to
+  ///         find this file due to requirements from \p RequestingModule.
+  bool findUsableModuleForHeader(const FileEntry *File,
+                                 const DirectoryEntry *Root,
+                                 Module *RequestingModule,
+                                 ModuleMap::KnownHeader *SuggestedModule,
+                                 bool IsSystemHeaderDir);
+
+  /// \brief Find and suggest a usable module for the given file, which is part of
+  /// the specified framework.
+  ///
+  /// \return \c true if the file can be used, \c false if we are not permitted to
+  ///         find this file due to requirements from \p RequestingModule.
+  bool findUsableModuleForFrameworkHeader(
+      const FileEntry *File, StringRef FrameworkDir, Module *RequestingModule,
+      ModuleMap::KnownHeader *SuggestedModule, bool IsSystemFramework);
+
+  /// \brief Look up the file with the specified name and determine its owning
+  /// module.
+  const FileEntry *
+  getFileAndSuggestModule(StringRef FileName, SourceLocation IncludeLoc,
+                          const DirectoryEntry *Dir, bool IsSystemHeaderDir,
+                          Module *RequestingModule,
+                          ModuleMap::KnownHeader *SuggestedModule);
+
 public:
   /// \brief Retrieve the module map.
   ModuleMap &getModuleMap() { return ModMap; }
@@ -609,12 +633,17 @@ public:
   /// \brief Retrieve a uniqued framework name.
   StringRef getUniqueFrameworkName(StringRef Framework);
   
+  /// \brief Suggest a path by which the specified file could be found, for
+  /// use in diagnostics to suggest a #include.
+  ///
+  /// \param IsSystem If non-null, filled in to indicate whether the suggested
+  ///        path is relative to a system header directory.
+  std::string suggestPathToFileForDiagnostics(const FileEntry *File,
+                                              bool *IsSystem = nullptr);
+
   void PrintStats();
   
   size_t getTotalMemory() const;
-
-  static std::string NormalizeDashIncludePath(StringRef File,
-                                              FileManager &FileMgr);
 
 private:
   /// \brief Describes what happened when we tried to load a module map file.

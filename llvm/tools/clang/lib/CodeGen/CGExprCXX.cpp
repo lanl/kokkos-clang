@@ -11,51 +11,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-/*
- * ###########################################################################
- * Copyright (c) 2016, Los Alamos National Security, LLC All rights
- * reserved. Copyright 2016. Los Alamos National Security, LLC. This
- * software was produced under U.S. Government contract DE-AC52-06NA25396
- * for Los Alamos National Laboratory (LANL), which is operated by Los
- * Alamos National Security, LLC for the U.S. Department of Energy. The
- * U.S. Government has rights to use, reproduce, and distribute this
- * software.  NEITHER THE GOVERNMENT NOR LOS ALAMOS NATIONAL SECURITY,
- * LLC MAKES ANY WARRANTY, EXPRESS OR IMPLIED, OR ASSUMES ANY LIABILITY
- * FOR THE USE OF THIS SOFTWARE.  If software is modified to produce
- * derivative works, such modified software should be clearly marked, so
- * as not to confuse it with the version available from LANL.
- *  
- * Additionally, redistribution and use in source and binary forms, with
- * or without modification, are permitted provided that the following
- * conditions are met: 1.       Redistributions of source code must
- * retain the above copyright notice, this list of conditions and the
- * following disclaimer. 2.      Redistributions in binary form must
- * reproduce the above copyright notice, this list of conditions and the
- * following disclaimer in the documentation and/or other materials
- * provided with the distribution. 3.      Neither the name of Los Alamos
- * National Security, LLC, Los Alamos National Laboratory, LANL, the U.S.
- * Government, nor the names of its contributors may be used to endorse
- * or promote products derived from this software without specific prior
- * written permission.
-  
- * THIS SOFTWARE IS PROVIDED BY LOS ALAMOS NATIONAL SECURITY, LLC AND
- * CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING,
- * BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
- * FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL LOS
- * ALAMOS NATIONAL SECURITY, LLC OR CONTRIBUTORS BE LIABLE FOR ANY
- * DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
- * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
- * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE US
- * ########################################################################### 
- * 
- * Notes
- *
- * ##### 
- */
-
 #include "CodeGenFunction.h"
 #include "CGCUDARuntime.h"
 #include "CGCXXABI.h"
@@ -69,10 +24,11 @@
 using namespace clang;
 using namespace CodeGen;
 
-static RequiredArgs commonEmitCXXMemberOrOperatorCall(
-    CodeGenFunction &CGF, const CXXMethodDecl *MD, llvm::Value *Callee,
-    ReturnValueSlot ReturnValue, llvm::Value *This, llvm::Value *ImplicitParam,
-    QualType ImplicitParamTy, const CallExpr *CE, CallArgList &Args) {
+static RequiredArgs
+commonEmitCXXMemberOrOperatorCall(CodeGenFunction &CGF, const CXXMethodDecl *MD,
+                                  llvm::Value *This, llvm::Value *ImplicitParam,
+                                  QualType ImplicitParamTy, const CallExpr *CE,
+                                  CallArgList &Args) {
   assert(CE == nullptr || isa<CXXMemberCallExpr>(CE) ||
          isa<CXXOperatorCallExpr>(CE));
   assert(MD->isInstance() &&
@@ -98,7 +54,7 @@ static RequiredArgs commonEmitCXXMemberOrOperatorCall(
   }
 
   const FunctionProtoType *FPT = MD->getType()->castAs<FunctionProtoType>();
-  RequiredArgs required = RequiredArgs::forPrototypePlus(FPT, Args.size());
+  RequiredArgs required = RequiredArgs::forPrototypePlus(FPT, Args.size(), MD);
 
   // And the rest of the call args.
   if (CE) {
@@ -121,21 +77,20 @@ RValue CodeGenFunction::EmitCXXMemberOrOperatorCall(
   const FunctionProtoType *FPT = MD->getType()->castAs<FunctionProtoType>();
   CallArgList Args;
   RequiredArgs required = commonEmitCXXMemberOrOperatorCall(
-      *this, MD, Callee, ReturnValue, This, ImplicitParam, ImplicitParamTy, CE,
-      Args);
+      *this, MD, This, ImplicitParam, ImplicitParamTy, CE, Args);
   return EmitCall(CGM.getTypes().arrangeCXXMethodCall(Args, FPT, required),
                   Callee, ReturnValue, Args, MD);
 }
 
-RValue CodeGenFunction::EmitCXXStructorCall(
-    const CXXMethodDecl *MD, llvm::Value *Callee, ReturnValueSlot ReturnValue,
-    llvm::Value *This, llvm::Value *ImplicitParam, QualType ImplicitParamTy,
-    const CallExpr *CE, StructorType Type) {
+RValue CodeGenFunction::EmitCXXDestructorCall(
+    const CXXDestructorDecl *DD, llvm::Value *Callee, llvm::Value *This,
+    llvm::Value *ImplicitParam, QualType ImplicitParamTy, const CallExpr *CE,
+    StructorType Type) {
   CallArgList Args;
-  commonEmitCXXMemberOrOperatorCall(*this, MD, Callee, ReturnValue, This,
-                                    ImplicitParam, ImplicitParamTy, CE, Args);
-  return EmitCall(CGM.getTypes().arrangeCXXStructorDeclaration(MD, Type),
-                  Callee, ReturnValue, Args, MD);
+  commonEmitCXXMemberOrOperatorCall(*this, DD, This, ImplicitParam,
+                                    ImplicitParamTy, CE, Args);
+  return EmitCall(CGM.getTypes().arrangeCXXStructorDeclaration(DD, Type),
+                  Callee, ReturnValueSlot(), Args, DD);
 }
 
 static CXXRecordDecl *getCXXRecord(const Expr *E) {
@@ -212,9 +167,9 @@ RValue CodeGenFunction::EmitCXXMemberOrOperatorMemberCallExpr(
               llvm::Value* last = nullptr;
 
               for(size_t i = indices.size() - 1; i > 0; --i){
-                llvm::Value* dim = 
+                llvm::Value* dim =
                   Builder.CreateConstGEP1_32(viewDimsPtr, i, "dim.ptr");
-                
+
                 dim = Builder.CreateLoad(ideasAddr(dim), "dim");
 
                 if(last){
@@ -237,6 +192,8 @@ RValue CodeGenFunction::EmitCXXMemberOrOperatorMemberCallExpr(
       }
     }
   }
+  // ==============
+
 
   // Compute the object pointer.
   bool CanUseVirtualCall = MD->isVirtual() && !HasQualifier;
@@ -362,7 +319,8 @@ RValue CodeGenFunction::EmitCXXMemberOrOperatorMemberCallExpr(
     if (SanOpts.has(SanitizerKind::CFINVCall) &&
         MD->getParent()->isDynamicClass()) {
       llvm::Value *VTable = GetVTablePtr(This, Int8PtrTy, MD->getParent());
-      EmitVTablePtrCheckForCall(MD, VTable, CFITCK_NVCall, CE->getLocStart());
+      EmitVTablePtrCheckForCall(MD->getParent(), VTable, CFITCK_NVCall,
+                                CE->getLocStart());
     }
 
     if (getLangOpts().AppleKext && MD->isVirtual() && HasQualifier)
@@ -376,7 +334,7 @@ RValue CodeGenFunction::EmitCXXMemberOrOperatorMemberCallExpr(
 
   if (MD->isVirtual()) {
     This = CGM.getCXXABI().adjustThisArgumentForVirtualFunctionCall(
-        *this, MD, This, UseVirtualCall);
+        *this, CalleeDecl, This, UseVirtualCall);
   }
 
   return EmitCXXMemberOrOperatorCall(MD, Callee, ReturnValue, This.getPointer(),
@@ -426,10 +384,11 @@ CodeGenFunction::EmitCXXMemberPointerCallExpr(const CXXMemberCallExpr *E,
   // Push the this ptr.
   Args.add(RValue::get(ThisPtrForCall), ThisType);
 
-  RequiredArgs required = RequiredArgs::forPrototypePlus(FPT, 1);
-  
+  RequiredArgs required =
+      RequiredArgs::forPrototypePlus(FPT, 1, /*FD=*/nullptr);
+
   // And the rest of the call args
-  EmitCallArgs(Args, FPT, E->arguments(), E->getDirectCallee());
+  EmitCallArgs(Args, FPT, E->arguments());
   return EmitCall(CGM.getTypes().arrangeCXXMethodCall(Args, FPT, required),
                   Callee, ReturnValue, Args);
 }
@@ -459,7 +418,38 @@ static void EmitNullBaseClassInitialization(CodeGenFunction &CGF,
   DestPtr = CGF.Builder.CreateElementBitCast(DestPtr, CGF.Int8Ty);
 
   const ASTRecordLayout &Layout = CGF.getContext().getASTRecordLayout(Base);
-  llvm::Value *SizeVal = CGF.CGM.getSize(Layout.getNonVirtualSize());
+  CharUnits NVSize = Layout.getNonVirtualSize();
+
+  // We cannot simply zero-initialize the entire base sub-object if vbptrs are
+  // present, they are initialized by the most derived class before calling the
+  // constructor.
+  SmallVector<std::pair<CharUnits, CharUnits>, 1> Stores;
+  Stores.emplace_back(CharUnits::Zero(), NVSize);
+
+  // Each store is split by the existence of a vbptr.
+  CharUnits VBPtrWidth = CGF.getPointerSize();
+  std::vector<CharUnits> VBPtrOffsets =
+      CGF.CGM.getCXXABI().getVBPtrOffsets(Base);
+  for (CharUnits VBPtrOffset : VBPtrOffsets) {
+    // Stop before we hit any virtual base pointers located in virtual bases.
+    if (VBPtrOffset >= NVSize)
+      break;
+    std::pair<CharUnits, CharUnits> LastStore = Stores.pop_back_val();
+    CharUnits LastStoreOffset = LastStore.first;
+    CharUnits LastStoreSize = LastStore.second;
+
+    CharUnits SplitBeforeOffset = LastStoreOffset;
+    CharUnits SplitBeforeSize = VBPtrOffset - SplitBeforeOffset;
+    assert(!SplitBeforeSize.isNegative() && "negative store size!");
+    if (!SplitBeforeSize.isZero())
+      Stores.emplace_back(SplitBeforeOffset, SplitBeforeSize);
+
+    CharUnits SplitAfterOffset = VBPtrOffset + VBPtrWidth;
+    CharUnits SplitAfterSize = LastStoreSize - SplitAfterOffset;
+    assert(!SplitAfterSize.isNegative() && "negative store size!");
+    if (!SplitAfterSize.isZero())
+      Stores.emplace_back(SplitAfterOffset, SplitAfterSize);
+  }
 
   // If the type contains a pointer to data member we can't memset it to zero.
   // Instead, create a null constant and copy it to the destination.
@@ -467,14 +457,12 @@ static void EmitNullBaseClassInitialization(CodeGenFunction &CGF,
   // like -1, which happens to be the pattern used by member-pointers.
   // TODO: isZeroInitializable can be over-conservative in the case where a
   // virtual base contains a member pointer.
-  if (!CGF.CGM.getTypes().isZeroInitializable(Base)) {
-    llvm::Constant *NullConstant = CGF.CGM.EmitNullConstantForBase(Base);
-
-    llvm::GlobalVariable *NullVariable = 
-      new llvm::GlobalVariable(CGF.CGM.getModule(), NullConstant->getType(),
-                               /*isConstant=*/true, 
-                               llvm::GlobalVariable::PrivateLinkage,
-                               NullConstant, Twine());
+  llvm::Constant *NullConstantForBase = CGF.CGM.EmitNullConstantForBase(Base);
+  if (!NullConstantForBase->isNullValue()) {
+    llvm::GlobalVariable *NullVariable = new llvm::GlobalVariable(
+        CGF.CGM.getModule(), NullConstantForBase->getType(),
+        /*isConstant=*/true, llvm::GlobalVariable::PrivateLinkage,
+        NullConstantForBase, Twine());
 
     CharUnits Align = std::max(Layout.getNonVirtualAlignment(),
                                DestPtr.getAlignment());
@@ -483,14 +471,29 @@ static void EmitNullBaseClassInitialization(CodeGenFunction &CGF,
     Address SrcPtr = Address(CGF.EmitCastToVoidPtr(NullVariable), Align);
 
     // Get and call the appropriate llvm.memcpy overload.
-    CGF.Builder.CreateMemCpy(DestPtr, SrcPtr, SizeVal);
-    return;
-  } 
-  
+    for (std::pair<CharUnits, CharUnits> Store : Stores) {
+      CharUnits StoreOffset = Store.first;
+      CharUnits StoreSize = Store.second;
+      llvm::Value *StoreSizeVal = CGF.CGM.getSize(StoreSize);
+      CGF.Builder.CreateMemCpy(
+          CGF.Builder.CreateConstInBoundsByteGEP(DestPtr, StoreOffset),
+          CGF.Builder.CreateConstInBoundsByteGEP(SrcPtr, StoreOffset),
+          StoreSizeVal);
+    }
+
   // Otherwise, just memset the whole thing to zero.  This is legal
   // because in LLVM, all default initializers (other than the ones we just
   // handled above) are guaranteed to have a bit pattern of all zeros.
-  CGF.Builder.CreateMemSet(DestPtr, CGF.Builder.getInt8(0), SizeVal);
+  } else {
+    for (std::pair<CharUnits, CharUnits> Store : Stores) {
+      CharUnits StoreOffset = Store.first;
+      CharUnits StoreSize = Store.second;
+      llvm::Value *StoreSizeVal = CGF.CGM.getSize(StoreSize);
+      CGF.Builder.CreateMemSet(
+          CGF.Builder.CreateConstInBoundsByteGEP(DestPtr, StoreOffset),
+          CGF.Builder.getInt8(0), StoreSizeVal);
+    }
+  }
 }
 
 void
@@ -533,8 +536,8 @@ CodeGenFunction::EmitCXXConstructExpr(const CXXConstructExpr *E,
     }
   }
   
-  if (const ConstantArrayType *arrayType 
-        = getContext().getAsConstantArrayType(E->getType())) {
+  if (const ArrayType *arrayType
+        = getContext().getAsArrayType(E->getType())) {
     EmitCXXAggrConstructorCall(CD, arrayType, Dest.getAddress(), E);
   } else {
     CXXCtorType Type = Ctor_Complete;
@@ -1072,15 +1075,18 @@ void CodeGenFunction::EmitNewArrayInitializer(
   if (auto *ILE = dyn_cast<InitListExpr>(Init)) {
     if (const RecordType *RType = ILE->getType()->getAs<RecordType>()) {
       if (RType->getDecl()->isStruct()) {
-        unsigned NumFields = 0;
+        unsigned NumElements = 0;
+        if (auto *CXXRD = dyn_cast<CXXRecordDecl>(RType->getDecl()))
+          NumElements = CXXRD->getNumBases();
         for (auto *Field : RType->getDecl()->fields())
           if (!Field->isUnnamedBitfield())
-            ++NumFields;
-        if (ILE->getNumInits() == NumFields)
+            ++NumElements;
+        // FIXME: Recurse into nested InitListExprs.
+        if (ILE->getNumInits() == NumElements)
           for (unsigned i = 0, e = ILE->getNumInits(); i != e; ++i)
             if (!isa<ImplicitValueInitExpr>(ILE->getInit(i)))
-              --NumFields;
-        if (ILE->getNumInits() == NumFields && TryMemsetInitialization())
+              --NumElements;
+        if (ILE->getNumInits() == NumElements && TryMemsetInitialization())
           return;
       }
     }
@@ -1392,9 +1398,11 @@ llvm::Value *CodeGenFunction::EmitCXXNewExpr(const CXXNewExpr *E) {
   Address allocation = Address::invalid();
   CallArgList allocatorArgs;
   if (allocator->isReservedGlobalPlacementOperator()) {
+    assert(E->getNumPlacementArgs() == 1);
+    const Expr *arg = *E->placement_arguments().begin();
+
     AlignmentSource alignSource;
-    allocation = EmitPointerWithAlignment(*E->placement_arguments().begin(),
-                                          &alignSource);
+    allocation = EmitPointerWithAlignment(arg, &alignSource);
 
     // The pointer expression will, in many cases, be an opaque void*.
     // In these cases, discard the computed alignment and use the
@@ -1402,6 +1410,14 @@ llvm::Value *CodeGenFunction::EmitCXXNewExpr(const CXXNewExpr *E) {
     if (alignSource != AlignmentSource::Decl) {
       allocation = Address(allocation.getPointer(),
                            getContext().getTypeAlignInChars(allocType));
+    }
+
+    // Set up allocatorArgs for the call to operator delete if it's not
+    // the reserved global operator.
+    if (E->getOperatorDelete() &&
+        !E->getOperatorDelete()->isReservedGlobalPlacementOperator()) {
+      allocatorArgs.add(RValue::get(allocSize), getContext().getSizeType());
+      allocatorArgs.add(RValue::get(allocation.getPointer()), arg->getType());
     }
 
   } else {
@@ -1619,9 +1635,8 @@ static void EmitObjectDelete(CodeGenFunction &CGF,
                               /*ForVirtualBase=*/false,
                               /*Delegating=*/false,
                               Ptr);
-  else if (CGF.getLangOpts().ObjCAutoRefCount &&
-           ElementType->isObjCLifetimeType()) {
-    switch (ElementType.getObjCLifetime()) {
+  else if (auto Lifetime = ElementType.getObjCLifetime()) {
+    switch (Lifetime) {
     case Qualifiers::OCL_None:
     case Qualifiers::OCL_ExplicitNone:
     case Qualifiers::OCL_Autoreleasing:
@@ -1899,6 +1914,7 @@ static llvm::Value *EmitDynamicCastToNull(CodeGenFunction &CGF,
 
 llvm::Value *CodeGenFunction::EmitDynamicCast(Address ThisAddr,
                                               const CXXDynamicCastExpr *DCE) {
+  CGM.EmitExplicitCastExprType(DCE, this);
   QualType DestTy = DCE->getTypeAsWritten();
 
   if (DCE->isAlwaysNull())
@@ -1956,6 +1972,7 @@ llvm::Value *CodeGenFunction::EmitDynamicCast(Address ThisAddr,
            "destination type must be a record type!");
     Value = CGM.getCXXABI().EmitDynamicCastCall(*this, ThisAddr, SrcRecordTy,
                                                 DestTy, DestRecordTy, CastEnd);
+    CastNotNull = Builder.GetInsertBlock();
   }
 
   if (ShouldNullCheckSrcValue) {

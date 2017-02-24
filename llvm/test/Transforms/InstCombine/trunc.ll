@@ -118,3 +118,66 @@ define i8 @test10(i32 %X) {
 ; CHECK: and
 ; CHECK: ret
 }
+
+; PR25543
+; https://llvm.org/bugs/show_bug.cgi?id=25543
+; This is an extractelement.
+
+define i32 @trunc_bitcast1(<4 x i32> %v) {
+  %bc = bitcast <4 x i32> %v to i128
+  %shr = lshr i128 %bc, 32
+  %ext = trunc i128 %shr to i32
+  ret i32 %ext
+
+; CHECK-LABEL: @trunc_bitcast1(
+; CHECK-NEXT:  %ext = extractelement <4 x i32> %v, i32 1
+; CHECK-NEXT:  ret i32 %ext
+}
+
+; A bitcast may still be required.
+
+define i32 @trunc_bitcast2(<2 x i64> %v) {
+  %bc = bitcast <2 x i64> %v to i128
+  %shr = lshr i128 %bc, 64
+  %ext = trunc i128 %shr to i32
+  ret i32 %ext
+
+; CHECK-LABEL: @trunc_bitcast2(
+; CHECK-NEXT:  %bc1 = bitcast <2 x i64> %v to <4 x i32>
+; CHECK-NEXT:  %ext = extractelement <4 x i32> %bc1, i32 2
+; CHECK-NEXT:  ret i32 %ext
+}
+
+; The right shift is optional.
+
+define i32 @trunc_bitcast3(<4 x i32> %v) {
+  %bc = bitcast <4 x i32> %v to i128
+  %ext = trunc i128 %bc to i32
+  ret i32 %ext
+
+; CHECK-LABEL: @trunc_bitcast3(
+; CHECK-NEXT:  %ext = extractelement <4 x i32> %v, i32 0
+; CHECK-NEXT:  ret i32 %ext
+}
+
+; CHECK-LABEL: @trunc_shl_infloop(
+; CHECK: %tmp = lshr i64 %arg, 1
+; CHECK: %tmp21 = shl i64 %tmp, 2
+; CHECK: %tmp2 = trunc i64 %tmp21 to i32
+; CHECK: icmp sgt i32 %tmp2, 0
+define void @trunc_shl_infloop(i64 %arg) {
+bb:
+  %tmp = lshr i64 %arg, 1
+  %tmp1 = trunc i64 %tmp to i32
+  %tmp2 = shl i32 %tmp1, 2
+  %tmp3 = icmp sgt i32 %tmp2, 0
+  br i1 %tmp3, label %bb2, label %bb1
+
+bb1:
+  %tmp5 = sub i32 0, %tmp1
+  %tmp6 = sub i32 %tmp5, 1
+  unreachable
+
+bb2:
+  unreachable
+}

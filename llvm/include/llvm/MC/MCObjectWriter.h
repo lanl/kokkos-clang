@@ -22,6 +22,7 @@ class MCAsmLayout;
 class MCAssembler;
 class MCFixup;
 class MCFragment;
+class MCSymbol;
 class MCSymbolRefExpr;
 class MCValue;
 
@@ -48,6 +49,10 @@ protected:
 protected: // Can only create subclasses.
   MCObjectWriter(raw_pwrite_stream &OS, bool IsLittleEndian)
       : OS(&OS), IsLittleEndian(IsLittleEndian) {}
+
+  unsigned getInitialOffset() {
+    return OS->tell();
+  }
 
 public:
   virtual ~MCObjectWriter();
@@ -91,6 +96,11 @@ public:
                                           const MCSymbolRefExpr *A,
                                           const MCSymbolRefExpr *B,
                                           bool InSet) const;
+
+  virtual bool isSymbolRefDifferenceFullyResolvedImpl(const MCAssembler &Asm,
+                                                      const MCSymbol &A,
+                                                      const MCSymbol &B,
+                                                      bool InSet) const;
 
   virtual bool isSymbolRefDifferenceFullyResolvedImpl(const MCAssembler &Asm,
                                                       const MCSymbol &SymA,

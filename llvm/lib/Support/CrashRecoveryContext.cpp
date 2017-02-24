@@ -31,7 +31,6 @@ struct CrashRecoveryContextImpl {
   const CrashRecoveryContextImpl *Next;
 
   CrashRecoveryContext *CRC;
-  std::string Backtrace;
   ::jmp_buf JumpBuffer;
   volatile unsigned Failed : 1;
   unsigned SwitchedThread : 1;
@@ -244,7 +243,7 @@ void CrashRecoveryContext::Disable() {
 
 static const int Signals[] =
     { SIGABRT, SIGBUS, SIGFPE, SIGILL, SIGSEGV, SIGTRAP };
-static const unsigned NumSignals = sizeof(Signals) / sizeof(Signals[0]);
+static const unsigned NumSignals = array_lengthof(Signals);
 static struct sigaction PrevActions[NumSignals];
 
 static void CrashRecoverySignalHandler(int Signal) {
@@ -333,13 +332,6 @@ void CrashRecoveryContext::HandleCrash() {
   CrashRecoveryContextImpl *CRCI = (CrashRecoveryContextImpl *) Impl;
   assert(CRCI && "Crash recovery context never initialized!");
   CRCI->HandleCrash();
-}
-
-const std::string &CrashRecoveryContext::getBacktrace() const {
-  CrashRecoveryContextImpl *CRC = (CrashRecoveryContextImpl *) Impl;
-  assert(CRC && "Crash recovery context never initialized!");
-  assert(CRC->Failed && "No crash was detected!");
-  return CRC->Backtrace;
 }
 
 // FIXME: Portability.

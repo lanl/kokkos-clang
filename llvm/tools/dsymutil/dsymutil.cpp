@@ -24,6 +24,7 @@
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/TargetSelect.h"
+#include <cstdint>
 #include <string>
 
 using namespace llvm::dsymutil;
@@ -175,14 +176,17 @@ static std::error_code getUniqueFile(const llvm::Twine &Model, int &ResultFD,
 static std::string getOutputFileName(llvm::StringRef InputFile,
                                      bool TempFile = false) {
   if (TempFile) {
+    llvm::SmallString<128> TmpFile;
+    llvm::sys::path::system_temp_directory(true, TmpFile);
     llvm::StringRef Basename =
         OutputFileOpt.empty() ? InputFile : llvm::StringRef(OutputFileOpt);
-    llvm::Twine OutputFile = Basename + ".tmp%%%%%%.dwarf";
+    llvm::sys::path::append(TmpFile, llvm::sys::path::filename(Basename));
+
     int FD;
     llvm::SmallString<128> UniqueFile;
-    if (auto EC = getUniqueFile(OutputFile, FD, UniqueFile)) {
+    if (auto EC = getUniqueFile(TmpFile + ".tmp%%%%%.dwarf", FD, UniqueFile)) {
       llvm::errs() << "error: failed to create temporary outfile '"
-                   << OutputFile << "': " << EC.message() << '\n';
+                   << TmpFile << "': " << EC.message() << '\n';
       return "";
     }
     llvm::sys::RemoveFileOnSignal(UniqueFile);
@@ -233,10 +237,13 @@ void llvm::dsymutil::exitDsymutil(int ExitStatus) {
 }
 
 int main(int argc, char **argv) {
-  llvm::sys::PrintStackTraceOnErrorSignal();
+  llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
   llvm::PrettyStackTraceProgram StackPrinter(argc, argv);
   llvm::llvm_shutdown_obj Shutdown;
   LinkOptions Options;
+  void *MainAddr = (void *)(intptr_t)&exitDsymutil;
+  std::string SDKPath = llvm::sys::fs::getMainExecutable(argv[0], MainAddr);
+  SDKPath = llvm::sys::path::parent_path(SDKPath);
 
   HideUnrelatedOptions(DsymCategory);
   llvm::cl::ParseCommandLineOptions(
@@ -330,7 +337,7 @@ int main(int argc, char **argv) {
 
     if (NeedsTempFiles &&
         !MachOUtils::generateUniversalBinary(
-            TempFiles, getOutputFileName(InputFile), Options))
+            TempFiles, getOutputFileName(InputFile), Options, SDKPath))
       exitDsymutil(1);
   }
 

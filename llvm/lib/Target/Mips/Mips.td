@@ -24,6 +24,8 @@ class PredicateControl {
   list<Predicate> EncodingPredicates = [];
   // Predicates for the GPR size such as IsGP64bit
   list<Predicate> GPRPredicates = [];
+  // Predicates for the PTR size such as IsPTR64bit
+  list<Predicate> PTRPredicates = [];
   // Predicates for the FGR size and layout such as IsFP64bit
   list<Predicate> FGRPredicates = [];
   // Predicates for the instruction group membership such as ISA's and ASE's
@@ -34,6 +36,7 @@ class PredicateControl {
   list<Predicate> AdditionalPredicates = [];
   list<Predicate> Predicates = !listconcat(EncodingPredicates,
                                            GPRPredicates,
+                                           PTRPredicates,
                                            FGRPredicates,
                                            InsnPredicates,
                                            HardFloatPredicate,
@@ -62,6 +65,8 @@ def MipsInstrInfo : InstrInfo;
 
 def FeatureNoABICalls  : SubtargetFeature<"noabicalls", "NoABICalls", "true",
                                 "Disable SVR4-style position-independent code">;
+def FeaturePTR64Bit    : SubtargetFeature<"ptr64", "IsPTR64bit", "true",
+                                "Pointers are 64-bit wide">;
 def FeatureGP64Bit     : SubtargetFeature<"gp64", "IsGP64bit", "true",
                                 "General Purpose Registers are 64-bit wide">;
 def FeatureFP64Bit     : SubtargetFeature<"fp64", "IsFP64bit", "true",
@@ -154,6 +159,9 @@ def FeatureMips16  : SubtargetFeature<"mips16", "InMips16Mode", "true",
 def FeatureDSP : SubtargetFeature<"dsp", "HasDSP", "true", "Mips DSP ASE">;
 def FeatureDSPR2 : SubtargetFeature<"dspr2", "HasDSPR2", "true",
                                     "Mips DSP-R2 ASE", [FeatureDSP]>;
+def FeatureDSPR3
+    : SubtargetFeature<"dspr3", "HasDSPR3", "true", "Mips DSP-R3 ASE",
+                       [ FeatureDSP, FeatureDSPR2 ]>;
 
 def FeatureMSA : SubtargetFeature<"msa", "HasMSA", "true", "Mips MSA ASE">;
 
@@ -198,13 +206,11 @@ def : Proc<"mips64r2", [FeatureMips64r2]>;
 def : Proc<"mips64r3", [FeatureMips64r3]>;
 def : Proc<"mips64r5", [FeatureMips64r5]>;
 def : Proc<"mips64r6", [FeatureMips64r6]>;
-def : Proc<"mips16", [FeatureMips16]>;
 def : Proc<"octeon", [FeatureMips64r2, FeatureCnMips]>;
 def : ProcessorModel<"p5600", MipsP5600Model, [ImplP5600]>;
 
 def MipsAsmParser : AsmParser {
   let ShouldEmitMatchRegisterName = 0;
-  let MnemonicContainsDot = 1;
 }
 
 def MipsAsmParserVariant : AsmParserVariant {

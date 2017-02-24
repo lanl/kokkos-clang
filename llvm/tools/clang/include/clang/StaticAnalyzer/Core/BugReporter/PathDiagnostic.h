@@ -122,7 +122,7 @@ class PathDiagnosticRange : public SourceRange {
 public:
   bool isPoint;
 
-  PathDiagnosticRange(const SourceRange &R, bool isP = false)
+  PathDiagnosticRange(SourceRange R, bool isP = false)
     : SourceRange(R), isPoint(isP) {}
 
   PathDiagnosticRange() : isPoint(false) {}
@@ -774,8 +774,8 @@ public:
 
   void appendToDesc(StringRef S) {
     if (!ShortDesc.empty())
-      ShortDesc.append(S);
-    VerboseDesc.append(S);
+      ShortDesc += S;
+    VerboseDesc += S;
   }
 
   void resetPath() {

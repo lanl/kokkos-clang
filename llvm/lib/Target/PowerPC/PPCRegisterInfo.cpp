@@ -116,6 +116,9 @@ PPCRegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
                : (Subtarget.hasAltivec() ? CSR_Darwin32_Altivec_SaveList
                                          : CSR_Darwin32_SaveList);
 
+  if (TM.isPPC64() && MF->getInfo<PPCFunctionInfo>()->isSplitCSR())
+    return CSR_SRV464_TLS_PE_SaveList;
+
   // On PPC64, we might need to save r2 (but only if it is not reserved).
   bool SaveR2 = MF->getRegInfo().isAllocatable(PPC::X2);
 
@@ -126,6 +129,31 @@ PPCRegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
                     : (SaveR2 ? CSR_SVR464_R2_SaveList : CSR_SVR464_SaveList))
              : (Subtarget.hasAltivec() ? CSR_SVR432_Altivec_SaveList
                                        : CSR_SVR432_SaveList);
+}
+
+const MCPhysReg *
+PPCRegisterInfo::getCalleeSavedRegsViaCopy(const MachineFunction *MF) const {
+  assert(MF && "Invalid MachineFunction pointer.");
+  const PPCSubtarget &Subtarget = MF->getSubtarget<PPCSubtarget>();
+  if (Subtarget.isDarwinABI())
+    return nullptr;
+  if (!TM.isPPC64())
+    return nullptr;
+  if (MF->getFunction()->getCallingConv() != CallingConv::CXX_FAST_TLS)
+    return nullptr;
+  if (!MF->getInfo<PPCFunctionInfo>()->isSplitCSR())
+    return nullptr;
+
+  // On PPC64, we might need to save r2 (but only if it is not reserved).
+  bool SaveR2 = !getReservedRegs(*MF).test(PPC::X2);
+  if (Subtarget.hasAltivec())
+    return SaveR2
+      ? CSR_SVR464_R2_Altivec_ViaCopy_SaveList
+      : CSR_SVR464_Altivec_ViaCopy_SaveList;
+  else
+    return SaveR2
+      ? CSR_SVR464_R2_ViaCopy_SaveList
+      : CSR_SVR464_ViaCopy_SaveList;
 }
 
 const uint32_t *
@@ -232,16 +260,15 @@ BitVector PPCRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   if (TFI->needsFP(MF))
     Reserved.set(PPC::R31);
 
+  bool IsPositionIndependent = TM.isPositionIndependent();
   if (hasBasePointer(MF)) {
-    if (Subtarget.isSVR4ABI() && !TM.isPPC64() &&
-        TM.getRelocationModel() == Reloc::PIC_)
+    if (Subtarget.isSVR4ABI() && !TM.isPPC64() && IsPositionIndependent)
       Reserved.set(PPC::R29);
     else
       Reserved.set(PPC::R30);
   }
 
-  if (Subtarget.isSVR4ABI() && !TM.isPPC64() &&
-      TM.getRelocationModel() == Reloc::PIC_)
+  if (Subtarget.isSVR4ABI() && !TM.isPPC64() && IsPositionIndependent)
     Reserved.set(PPC::R30);
 
   // Reserve Altivec registers when Altivec is unavailable.
@@ -311,7 +338,7 @@ PPCRegisterInfo::getLargestLegalSuperClass(const TargetRegisterClass *RC,
 //===----------------------------------------------------------------------===//
 
 /// lowerDynamicAlloc - Generate the code for allocating an object in the
-/// current frame.  The sequence of code with be in the general form
+/// current frame.  The sequence of code will be in the general form
 ///
 ///   addi   R0, SP, \#frameSize ; get the address of the previous frame
 ///   stwxu  R0, SP, Rnegsize   ; add and update the SP with the negated size
@@ -427,6 +454,27 @@ void PPCRegisterInfo::lowerDynamicAlloc(MachineBasicBlock::iterator II) const {
   }
 
   // Discard the DYNALLOC instruction.
+  MBB.erase(II);
+}
+
+void PPCRegisterInfo::lowerDynamicAreaOffset(
+    MachineBasicBlock::iterator II) const {
+  // Get the instruction.
+  MachineInstr &MI = *II;
+  // Get the instruction's basic block.
+  MachineBasicBlock &MBB = *MI.getParent();
+  // Get the basic block's function.
+  MachineFunction &MF = *MBB.getParent();
+  // Get the frame info.
+  MachineFrameInfo *MFI = MF.getFrameInfo();
+  const PPCSubtarget &Subtarget = MF.getSubtarget<PPCSubtarget>();
+  // Get the instruction info.
+  const TargetInstrInfo &TII = *Subtarget.getInstrInfo();
+
+  unsigned maxCallFrameSize = MFI->getMaxCallFrameSize();
+  DebugLoc dl = MI.getDebugLoc();
+  BuildMI(MBB, II, dl, TII.get(PPC::LI), MI.getOperand(0).getReg())
+      .addImm(maxCallFrameSize);
   MBB.erase(II);
 }
 
@@ -754,6 +802,11 @@ PPCRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   // Get the instruction opcode.
   unsigned OpC = MI.getOpcode();
 
+  if ((OpC == PPC::DYNAREAOFFSET || OpC == PPC::DYNAREAOFFSET8)) {
+    lowerDynamicAreaOffset(II);
+    return;
+  }
+
   // Special case for dynamic alloca.
   if (FPSI && FrameIndex == FPSI &&
       (OpC == PPC::DYNALLOC || OpC == PPC::DYNALLOC8)) {
@@ -881,8 +934,7 @@ unsigned PPCRegisterInfo::getBaseRegister(const MachineFunction &MF) const {
   if (TM.isPPC64())
     return PPC::X30;
 
-  if (Subtarget.isSVR4ABI() &&
-      TM.getRelocationModel() == Reloc::PIC_)
+  if (Subtarget.isSVR4ABI() && TM.isPositionIndependent())
     return PPC::R29;
 
   return PPC::R30;

@@ -44,7 +44,7 @@ void SparcFrameLowering::emitSPAdjustment(MachineFunction &MF,
                                           unsigned ADDrr,
                                           unsigned ADDri) const {
 
-  DebugLoc dl = (MBBI != MBB.end()) ? MBBI->getDebugLoc() : DebugLoc();
+  DebugLoc dl;
   const SparcInstrInfo &TII =
       *static_cast<const SparcInstrInfo *>(MF.getSubtarget().getInstrInfo());
 
@@ -93,7 +93,9 @@ void SparcFrameLowering::emitPrologue(MachineFunction &MF,
   const SparcRegisterInfo &RegInfo =
       *static_cast<const SparcRegisterInfo *>(MF.getSubtarget().getRegisterInfo());
   MachineBasicBlock::iterator MBBI = MBB.begin();
-  DebugLoc dl = MBBI != MBB.end() ? MBBI->getDebugLoc() : DebugLoc();
+  // Debug location must be unknown since the first debug location is used
+  // to determine the end of the prologue.
+  DebugLoc dl;
   bool NeedsStackRealignment = RegInfo.needsStackRealignment(MF);
 
   // FIXME: unfortunately, returning false from canRealignStack
@@ -144,7 +146,7 @@ void SparcFrameLowering::emitPrologue(MachineFunction &MF,
   // Finally, ensure that the size is sufficiently aligned for the
   // data on the stack.
   if (MFI->getMaxAlignment() > 0) {
-    NumBytes = RoundUpToAlignment(NumBytes, MFI->getMaxAlignment());
+    NumBytes = alignTo(NumBytes, MFI->getMaxAlignment());
   }
 
   // Update stack size with corrected value.
@@ -181,7 +183,7 @@ void SparcFrameLowering::emitPrologue(MachineFunction &MF,
   }
 }
 
-void SparcFrameLowering::
+MachineBasicBlock::iterator SparcFrameLowering::
 eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
                               MachineBasicBlock::iterator I) const {
   if (!hasReservedCallFrame(MF)) {
@@ -193,7 +195,7 @@ eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
     if (Size)
       emitSPAdjustment(MF, MBB, I, Size, SP::ADDrr, SP::ADDri);
   }
-  MBB.erase(I);
+  return MBB.erase(I);
 }
 
 
@@ -348,7 +350,7 @@ void SparcFrameLowering::remapRegsForLeafProc(MachineFunction &MF) const {
   }
 
   assert(verifyLeafProcRegUse(&MRI));
-#ifdef XDEBUG
+#ifdef EXPENSIVE_CHECKS
   MF.verify(0, "After LeafProc Remapping");
 #endif
 }

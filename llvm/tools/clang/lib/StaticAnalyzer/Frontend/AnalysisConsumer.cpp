@@ -14,11 +14,11 @@
 #include "clang/StaticAnalyzer/Frontend/AnalysisConsumer.h"
 #include "ModelInjector.h"
 #include "clang/AST/ASTConsumer.h"
-#include "clang/AST/DataRecursiveASTVisitor.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/ParentMap.h"
+#include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Analysis/Analyses/LiveVariables.h"
 #include "clang/Analysis/CFG.h"
 #include "clang/Analysis/CallGraph.h"
@@ -47,10 +47,10 @@
 #include "llvm/Support/raw_ostream.h"
 #include <memory>
 #include <queue>
+#include <utility>
 
 using namespace clang;
 using namespace ento;
-using llvm::SmallPtrSet;
 
 #define DEBUG_TYPE "AnalysisConsumer"
 
@@ -141,7 +141,7 @@ public:
 namespace {
 
 class AnalysisConsumer : public AnalysisASTConsumer,
-                         public DataRecursiveASTVisitor<AnalysisConsumer> {
+                         public RecursiveASTVisitor<AnalysisConsumer> {
   enum {
     AM_None = 0,
     AM_Syntax = 0x1,
@@ -185,13 +185,12 @@ public:
   /// translation unit.
   FunctionSummariesTy FunctionSummaries;
 
-  AnalysisConsumer(const Preprocessor& pp,
-                   const std::string& outdir,
-                   AnalyzerOptionsRef opts,
-                   ArrayRef<std::string> plugins,
+  AnalysisConsumer(const Preprocessor &pp, const std::string &outdir,
+                   AnalyzerOptionsRef opts, ArrayRef<std::string> plugins,
                    CodeInjector *injector)
-    : RecVisitorMode(0), RecVisitorBR(nullptr), Ctx(nullptr), PP(pp),
-      OutDir(outdir), Opts(opts), Plugins(plugins), Injector(injector) {
+      : RecVisitorMode(0), RecVisitorBR(nullptr), Ctx(nullptr), PP(pp),
+        OutDir(outdir), Opts(std::move(opts)), Plugins(plugins),
+        Injector(injector) {
     DigestAnalyzerOptions();
     if (Opts->PrintStats) {
       llvm::EnableStatistics();
@@ -274,7 +273,7 @@ public:
       llvm::errs() << ": " << Loc.getFilename();
       if (isa<FunctionDecl>(D) || isa<ObjCMethodDecl>(D)) {
         const NamedDecl *ND = cast<NamedDecl>(D);
-        llvm::errs() << ' ' << *ND << '\n';
+        llvm::errs() << ' ' << ND->getQualifiedNameAsString() << '\n';
       }
       else if (isa<BlockDecl>(D)) {
         llvm::errs() << ' ' << "block(line:" << Loc.getLine() << ",col:"
@@ -368,7 +367,11 @@ public:
   bool VisitBlockDecl(BlockDecl *BD) {
     if (BD->hasBody()) {
       assert(RecVisitorMode == AM_Syntax || Mgr->shouldInlineCall() == false);
-      HandleCode(BD, RecVisitorMode);
+      // Since we skip function template definitions, we should skip blocks
+      // declared in those functions as well.
+      if (!BD->isDependentContext()) {
+        HandleCode(BD, RecVisitorMode);
+      }
     }
     return true;
   }
@@ -492,10 +495,11 @@ void AnalysisConsumer::HandleDeclsCallGraph(const unsigned LocalTUDeclsSize) {
                (Mgr->options.InliningMode == All ? nullptr : &VisitedCallees));
 
     // Add the visited callees to the global visited set.
-    for (SetOfConstDecls::iterator I = VisitedCallees.begin(),
-                                   E = VisitedCallees.end(); I != E; ++I) {
-        Visited.insert(*I);
-    }
+    for (const Decl *Callee : VisitedCallees)
+      // Decls from CallGraph are already canonical. But Decls coming from
+      // CallExprs may be not. We should canonicalize them manually.
+      Visited.insert(isa<ObjCMethodDecl>(Callee) ? Callee
+                                                 : Callee->getCanonicalDecl());
     VisitedAsTopLevel.insert(D);
   }
 }
@@ -794,10 +798,7 @@ UbigraphViz::~UbigraphViz() {
   std::string Ubiviz;
   if (auto Path = llvm::sys::findProgramByName("ubiviz"))
     Ubiviz = *Path;
-  std::vector<const char*> args;
-  args.push_back(Ubiviz.c_str());
-  args.push_back(Filename.c_str());
-  args.push_back(nullptr);
+  const char *args[] = {Ubiviz.c_str(), Filename.c_str(), nullptr};
 
   if (llvm::sys::ExecuteAndWait(Ubiviz, &args[0], nullptr, nullptr, 0, 0,
                                 &ErrMsg)) {

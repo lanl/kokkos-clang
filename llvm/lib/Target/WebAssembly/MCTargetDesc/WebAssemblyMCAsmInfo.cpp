@@ -15,7 +15,6 @@
 
 #include "WebAssemblyMCAsmInfo.h"
 #include "llvm/ADT/Triple.h"
-#include "llvm/Support/CommandLine.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "wasm-mc-asm-info"
@@ -27,13 +26,11 @@ WebAssemblyMCAsmInfo::WebAssemblyMCAsmInfo(const Triple &T) {
 
   // TODO: What should MaxInstLength be?
 
-  // The s-expression format of WebAssembly uses LISP-style comments.
-  CommentString = ";;";
-
-  PrivateGlobalPrefix = "";
-  PrivateLabelPrefix = "";
-
   UseDataRegionDirectives = true;
+
+  // Use .skip instead of .zero because .zero is confusing when used with two
+  // arguments (it doesn't actually zero things out).
+  ZeroDirective = "\t.skip\t";
 
   Data8bitsDirective = "\t.int8\t";
   Data16bitsDirective = "\t.int16\t";
@@ -44,17 +41,13 @@ WebAssemblyMCAsmInfo::WebAssemblyMCAsmInfo(const Triple &T) {
   COMMDirectiveAlignmentIsInBytes = false;
   LCOMMDirectiveAlignmentType = LCOMM::Log2Alignment;
 
-  HasDotTypeDotSizeDirective = false;
-  HasSingleParameterDotFile = false;
-
   SupportsDebugInformation = true;
 
   // For now, WebAssembly does not support exceptions.
   ExceptionsType = ExceptionHandling::None;
 
-  // FIXME: modify AsmPrinter to be more flexible, and fix other virtual ISAs.
-  WeakDirective = "\t;; .weak\t";
-  GlobalDirective = "\t;; .globl\t";
-
   // TODO: UseIntegratedAssembler?
+
+  // WebAssembly's stack is never executable.
+  UsesNonexecutableStackSection = false;
 }

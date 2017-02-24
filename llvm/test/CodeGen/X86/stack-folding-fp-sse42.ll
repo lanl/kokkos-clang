@@ -1,4 +1,4 @@
-; RUN: llc -O3 -disable-peephole -mtriple=x86_64-unknown-unknown -mcpu=x86-64 -mattr=+sse4.2 < %s | FileCheck %s
+; RUN: llc -O3 -disable-peephole -mtriple=x86_64-unknown-unknown -mattr=+sse4.2 < %s | FileCheck %s
 
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-unknown-unknown"
@@ -244,6 +244,15 @@ define <2 x double> @stack_fold_cvtdq2pd(<4 x i32> %a0) {
   ;CHECK-LABEL: stack_fold_cvtdq2pd
   ;CHECK:       cvtdq2pd {{-?[0-9]*}}(%rsp), {{%xmm[0-9][0-9]*}} {{.*#+}} 16-byte Folded Reload
   %1 = tail call <2 x i64> asm sideeffect "nop", "=x,~{xmm1},~{xmm2},~{xmm3},~{xmm4},~{xmm5},~{xmm6},~{xmm7},~{xmm8},~{xmm9},~{xmm10},~{xmm11},~{xmm12},~{xmm13},~{xmm14},~{xmm15},~{flags}"()
+  %2 = shufflevector <4 x i32> %a0, <4 x i32> undef, <2 x i32> <i32 0, i32 1>
+  %3 = sitofp <2 x i32> %2 to <2 x double>
+  ret <2 x double> %3
+}
+
+define <2 x double> @stack_fold_cvtdq2pd_int(<4 x i32> %a0) {
+  ;CHECK-LABEL: stack_fold_cvtdq2pd_int
+  ;CHECK:       cvtdq2pd {{-?[0-9]*}}(%rsp), {{%xmm[0-9][0-9]*}} {{.*#+}} 16-byte Folded Reload
+  %1 = tail call <2 x i64> asm sideeffect "nop", "=x,~{xmm1},~{xmm2},~{xmm3},~{xmm4},~{xmm5},~{xmm6},~{xmm7},~{xmm8},~{xmm9},~{xmm10},~{xmm11},~{xmm12},~{xmm13},~{xmm14},~{xmm15},~{flags}"()
   %2 = call <2 x double> @llvm.x86.sse2.cvtdq2pd(<4 x i32> %a0)
   ret <2 x double> %2
 }
@@ -287,6 +296,15 @@ define <2 x double> @stack_fold_cvtps2pd(<4 x float> %a0) {
   ;CHECK-LABEL: stack_fold_cvtps2pd
   ;CHECK:       cvtps2pd {{-?[0-9]*}}(%rsp), {{%xmm[0-9][0-9]*}} {{.*#+}} 16-byte Folded Reload
   %1 = tail call <2 x i64> asm sideeffect "nop", "=x,~{xmm1},~{xmm2},~{xmm3},~{xmm4},~{xmm5},~{xmm6},~{xmm7},~{xmm8},~{xmm9},~{xmm10},~{xmm11},~{xmm12},~{xmm13},~{xmm14},~{xmm15},~{flags}"()
+  %2 = shufflevector <4 x float> %a0, <4 x float> undef, <2 x i32> <i32 0, i32 1>
+  %3 = fpext <2 x float> %2 to <2 x double>
+  ret <2 x double> %3
+}
+
+define <2 x double> @stack_fold_cvtps2pd_int(<4 x float> %a0) {
+  ;CHECK-LABEL: stack_fold_cvtps2pd_int
+  ;CHECK:       cvtps2pd {{-?[0-9]*}}(%rsp), {{%xmm[0-9][0-9]*}} {{.*#+}} 16-byte Folded Reload
+  %1 = tail call <2 x i64> asm sideeffect "nop", "=x,~{xmm1},~{xmm2},~{xmm3},~{xmm4},~{xmm5},~{xmm6},~{xmm7},~{xmm8},~{xmm9},~{xmm10},~{xmm11},~{xmm12},~{xmm13},~{xmm14},~{xmm15},~{flags}"()
   %2 = call <2 x double> @llvm.x86.sse2.cvtps2pd(<4 x float> %a0)
   ret <2 x double> %2
 }
@@ -307,7 +325,7 @@ declare i32 @llvm.x86.sse2.cvtsd2si(<2 x double>) nounwind readnone
 
 define i64 @stack_fold_cvtsd2si64_int(<2 x double> %a0) {
   ;CHECK-LABEL: stack_fold_cvtsd2si64_int
-  ;CHECK:       cvtsd2siq {{-?[0-9]*}}(%rsp), %rax {{.*#+}} 16-byte Folded Reload
+  ;CHECK:       cvtsd2si {{-?[0-9]*}}(%rsp), %rax {{.*#+}} 16-byte Folded Reload
   %1 = tail call <2 x i64> asm sideeffect "nop", "=x,~{xmm1},~{xmm2},~{xmm3},~{xmm4},~{xmm5},~{xmm6},~{xmm7},~{xmm8},~{xmm9},~{xmm10},~{xmm11},~{xmm12},~{xmm13},~{xmm14},~{xmm15},~{flags}"()
   %2 = call i64 @llvm.x86.sse2.cvtsd2si64(<2 x double> %a0)
   ret i64 %2
@@ -637,7 +655,15 @@ define <4 x float> @stack_fold_hsubps(<4 x float> %a0, <4 x float> %a1) {
 }
 declare <4 x float> @llvm.x86.sse3.hsub.ps(<4 x float>, <4 x float>) nounwind readnone
 
-; TODO stack_fold_insertps
+define <4 x float> @stack_fold_insertps(<4 x float> %a0, <4 x float> %a1) {
+  ;CHECK-LABEL: stack_fold_insertps
+  ;CHECK:       insertps $17, {{-?[0-9]*}}(%rsp), {{%xmm[0-9][0-9]*}} {{.*#+}} 16-byte Folded Reload
+  ;CHECK-NEXT:                                                        {{.*#+}} xmm0 = zero,mem[0],xmm0[2,3]
+  %1 = tail call <2 x i64> asm sideeffect "nop", "=x,~{xmm2},~{xmm3},~{xmm4},~{xmm5},~{xmm6},~{xmm7},~{xmm8},~{xmm9},~{xmm10},~{xmm11},~{xmm12},~{xmm13},~{xmm14},~{xmm15},~{flags}"()
+  %2 = call <4 x float> @llvm.x86.sse41.insertps(<4 x float> %a0, <4 x float> %a1, i8 209)
+  ret <4 x float> %2
+}
+declare <4 x float> @llvm.x86.sse41.insertps(<4 x float>, <4 x float>, i8) nounwind readnone
 
 define <2 x double> @stack_fold_maxpd(<2 x double> %a0, <2 x double> %a1) {
   ;CHECK-LABEL: stack_fold_maxpd

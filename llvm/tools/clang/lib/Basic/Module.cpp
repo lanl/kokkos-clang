@@ -28,11 +28,12 @@ Module::Module(StringRef Name, SourceLocation DefinitionLoc, Module *Parent,
                bool IsFramework, bool IsExplicit, unsigned VisibilityID)
     : Name(Name), DefinitionLoc(DefinitionLoc), Parent(Parent), Directory(),
       Umbrella(), Signature(0), ASTFile(nullptr), VisibilityID(VisibilityID),
-      IsMissingRequirement(false), IsAvailable(true), IsFromModuleFile(false),
-      IsFramework(IsFramework), IsExplicit(IsExplicit), IsSystem(false),
-      IsExternC(false), IsInferred(false), InferSubmodules(false),
-      InferExplicitSubmodules(false), InferExportWildcard(false),
-      ConfigMacrosExhaustive(false), NameVisibility(Hidden) {
+      IsMissingRequirement(false), HasIncompatibleModuleFile(false),
+      IsAvailable(true), IsFromModuleFile(false), IsFramework(IsFramework),
+      IsExplicit(IsExplicit), IsSystem(false), IsExternC(false),
+      IsInferred(false), InferSubmodules(false), InferExplicitSubmodules(false),
+      InferExportWildcard(false), ConfigMacrosExhaustive(false),
+      NameVisibility(Hidden) {
   if (Parent) {
     if (!Parent->isAvailable())
       IsAvailable = false;
@@ -417,12 +418,8 @@ void Module::print(raw_ostream &OS, unsigned Indent) const {
     OS.indent(Indent + 2);
     OS << "export ";
     printModuleId(OS, UnresolvedExports[I].Id);
-    if (UnresolvedExports[I].Wildcard) {
-      if (UnresolvedExports[I].Id.empty())
-        OS << "*";
-      else
-        OS << ".*";
-    }
+    if (UnresolvedExports[I].Wildcard)
+      OS << (UnresolvedExports[I].Id.empty() ? "*" : ".*");
     OS << "\n";
   }
 
@@ -485,12 +482,13 @@ void Module::print(raw_ostream &OS, unsigned Indent) const {
   OS << "}\n";
 }
 
-void Module::dump() const {
+LLVM_DUMP_METHOD void Module::dump() const {
   print(llvm::errs());
 }
 
 void VisibleModuleSet::setVisible(Module *M, SourceLocation Loc,
                                   VisibleCallback Vis, ConflictCallback Cb) {
+  assert(Loc.isValid() && "setVisible expects a valid import location");
   if (isVisible(M))
     return;
 

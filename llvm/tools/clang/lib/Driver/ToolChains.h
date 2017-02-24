@@ -11,12 +11,14 @@
 #define LLVM_CLANG_LIB_DRIVER_TOOLCHAINS_H
 
 #include "Tools.h"
+#include "clang/Basic/Cuda.h"
 #include "clang/Basic/VersionTuple.h"
 #include "clang/Driver/Action.h"
 #include "clang/Driver/Multilib.h"
 #include "clang/Driver/ToolChain.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/Optional.h"
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/Support/Compiler.h"
 #include <set>
 #include <vector>
@@ -78,6 +80,7 @@ public:
   class GCCInstallationDetector {
     bool IsValid;
     llvm::Triple GCCTriple;
+    const Driver &D;
 
     // FIXME: These might be better as path objects.
     std::string GCCInstallPath;
@@ -99,9 +102,8 @@ public:
     MultilibSet Multilibs;
 
   public:
-    GCCInstallationDetector() : IsValid(false) {}
-    void init(const Driver &D, const llvm::Triple &TargetTriple,
-              const llvm::opt::ArgList &Args,
+    explicit GCCInstallationDetector(const Driver &D) : IsValid(false), D(D) {}
+    void init(const llvm::Triple &TargetTriple, const llvm::opt::ArgList &Args,
               ArrayRef<std::string> ExtraTripleAliases = None);
 
     /// \brief Check whether we detected a valid GCC install.
@@ -158,33 +160,53 @@ protected:
   GCCInstallationDetector GCCInstallation;
 
   // \brief A class to find a viable CUDA installation
-
   class CudaInstallationDetector {
-    bool IsValid;
-    std::string CudaInstallPath;
-    std::string CudaLibPath;
-    std::string CudaLibDevicePath;
-    std::string CudaIncludePath;
+  private:
+    const Driver &D;
+    bool IsValid = false;
+    CudaVersion Version = CudaVersion::UNKNOWN;
+    std::string InstallPath;
+    std::string BinPath;
+    std::string LibPath;
+    std::string LibDevicePath;
+    std::string IncludePath;
+    llvm::StringMap<std::string> LibDeviceMap;
+
+    // CUDA architectures for which we have raised an error in
+    // CheckCudaVersionSupportsArch.
+    mutable llvm::SmallSet<CudaArch, 4> ArchsWithVersionTooLowErrors;
 
   public:
-    CudaInstallationDetector() : IsValid(false) {}
-    void init(const Driver &D, const llvm::Triple &TargetTriple,
-              const llvm::opt::ArgList &Args);
+    CudaInstallationDetector(const Driver &D) : D(D) {}
+    void init(const llvm::Triple &TargetTriple, const llvm::opt::ArgList &Args);
+
+    /// \brief Emit an error if Version does not support the given Arch.
+    ///
+    /// If either Version or Arch is unknown, does not emit an error.  Emits at
+    /// most one error per Arch.
+    void CheckCudaVersionSupportsArch(CudaArch Arch) const;
 
     /// \brief Check whether we detected a valid Cuda install.
     bool isValid() const { return IsValid; }
     /// \brief Print information about the detected CUDA installation.
     void print(raw_ostream &OS) const;
 
+    /// \brief Get the deteced Cuda install's version.
+    CudaVersion version() const { return Version; }
     /// \brief Get the detected Cuda installation path.
-    StringRef getInstallPath() const { return CudaInstallPath; }
+    StringRef getInstallPath() const { return InstallPath; }
+    /// \brief Get the detected path to Cuda's bin directory.
+    StringRef getBinPath() const { return BinPath; }
     /// \brief Get the detected Cuda Include path.
-    StringRef getIncludePath() const { return CudaIncludePath; }
+    StringRef getIncludePath() const { return IncludePath; }
     /// \brief Get the detected Cuda library path.
-    StringRef getLibPath() const { return CudaLibPath; }
+    StringRef getLibPath() const { return LibPath; }
     /// \brief Get the detected Cuda device library path.
-    StringRef getLibDevicePath() const { return CudaLibDevicePath; }
+    StringRef getLibDevicePath() const { return LibDevicePath; }
     /// \brief Get libdevice file for given architecture
+    std::string getLibDeviceFile(StringRef Gpu) const {
+      return LibDeviceMap.lookup(Gpu);
+    }
   };
 
   CudaInstallationDetector CudaInstallation;
@@ -215,6 +237,13 @@ protected:
 
   /// \brief Check whether the target triple's architecture is 32-bits.
   bool isTarget32Bit() const { return getTriple().isArch32Bit(); }
+
+  bool addLibStdCXXIncludePaths(Twine Base, Twine Suffix, StringRef GCCTriple,
+                                StringRef GCCMultiarchTriple,
+                                StringRef TargetMultiarchTriple,
+                                Twine IncludeSuffix,
+                                const llvm::opt::ArgList &DriverArgs,
+                                llvm::opt::ArgStringList &CC1Args) const;
 
   /// @}
 
@@ -275,8 +304,8 @@ public:
 
   /// Add any profiling runtime libraries that are needed. This is essentially a
   /// MachO specific version of addProfileRT in Tools.cpp.
-  virtual void addProfileRTLibs(const llvm::opt::ArgList &Args,
-                                llvm::opt::ArgStringList &CmdArgs) const {
+  void addProfileRTLibs(const llvm::opt::ArgList &Args,
+                        llvm::opt::ArgStringList &CmdArgs) const override {
     // There aren't any profiling libs for embedded targets currently.
   }
 
@@ -332,7 +361,9 @@ public:
 
   bool UseDwarfDebugFlags() const override;
 
-  bool UseSjLjExceptions() const override { return false; }
+  bool UseSjLjExceptions(const llvm::opt::ArgList &Args) const override {
+    return false;
+  }
 
   /// }
 };
@@ -347,7 +378,15 @@ public:
   // the argument translation business.
   mutable bool TargetInitialized;
 
-  enum DarwinPlatformKind { MacOS, IPhoneOS, IPhoneOSSimulator };
+  enum DarwinPlatformKind {
+    MacOS,
+    IPhoneOS,
+    IPhoneOSSimulator,
+    TvOS,
+    TvOSSimulator,
+    WatchOS,
+    WatchOSSimulator
+  };
 
   mutable DarwinPlatformKind TargetPlatform;
 
@@ -375,7 +414,8 @@ public:
                               llvm::opt::ArgStringList &CmdArgs) const override;
 
   bool isKernelStatic() const override {
-    return !isTargetIPhoneOS() || isIPhoneOSVersionLT(6, 0);
+    return (!(isTargetIPhoneOS() && !isIPhoneOSVersionLT(6, 0)) &&
+            !isTargetWatchOS());
   }
 
   void addProfileRTLibs(const llvm::opt::ArgList &Args,
@@ -404,17 +444,48 @@ protected:
 
   bool isTargetIPhoneOS() const {
     assert(TargetInitialized && "Target not initialized!");
-    return TargetPlatform == IPhoneOS;
+    return TargetPlatform == IPhoneOS || TargetPlatform == TvOS;
   }
 
   bool isTargetIOSSimulator() const {
     assert(TargetInitialized && "Target not initialized!");
-    return TargetPlatform == IPhoneOSSimulator;
+    return TargetPlatform == IPhoneOSSimulator ||
+           TargetPlatform == TvOSSimulator;
   }
 
   bool isTargetIOSBased() const {
     assert(TargetInitialized && "Target not initialized!");
     return isTargetIPhoneOS() || isTargetIOSSimulator();
+  }
+
+  bool isTargetTvOS() const {
+    assert(TargetInitialized && "Target not initialized!");
+    return TargetPlatform == TvOS;
+  }
+
+  bool isTargetTvOSSimulator() const {
+    assert(TargetInitialized && "Target not initialized!");
+    return TargetPlatform == TvOSSimulator;
+  }
+
+  bool isTargetTvOSBased() const {
+    assert(TargetInitialized && "Target not initialized!");
+    return TargetPlatform == TvOS || TargetPlatform == TvOSSimulator;
+  }
+
+  bool isTargetWatchOS() const {
+    assert(TargetInitialized && "Target not initialized!");
+    return TargetPlatform == WatchOS;
+  }
+
+  bool isTargetWatchOSSimulator() const {
+    assert(TargetInitialized && "Target not initialized!");
+    return TargetPlatform == WatchOSSimulator;
+  }
+
+  bool isTargetWatchOSBased() const {
+    assert(TargetInitialized && "Target not initialized!");
+    return TargetPlatform == WatchOS || TargetPlatform == WatchOSSimulator;
   }
 
   bool isTargetMacOS() const {
@@ -440,6 +511,10 @@ protected:
     return TargetVersion < VersionTuple(V0, V1, V2);
   }
 
+  StringRef getPlatformFamily() const;
+  static StringRef getSDKName(StringRef isysroot);
+  StringRef getOSLibraryNameSuffix() const;
+
 public:
   /// }
   /// @name ToolChain Implementation
@@ -454,6 +529,7 @@ public:
   TranslateArgs(const llvm::opt::DerivedArgList &Args,
                 const char *BoundArch) const override;
 
+  CXXStdlibType GetDefaultCXXStdlibType() const override;
   ObjCRuntime getDefaultObjCRuntime(bool isNonFragile) const override;
   bool hasBlocksRuntime() const override;
 
@@ -467,7 +543,7 @@ public:
   unsigned GetDefaultStackProtectorLevel(bool KernelOrKext) const override {
     // Stack protectors default to on for user code on 10.5,
     // and for everything in 10.6 and beyond
-    if (isTargetIOSBased())
+    if (isTargetIOSBased() || isTargetWatchOSBased())
       return 1;
     else if (isTargetMacOS() && !isMacosxVersionLT(10, 6))
       return 1;
@@ -481,7 +557,9 @@ public:
 
   void CheckObjCARC() const override;
 
-  bool UseSjLjExceptions() const override;
+  bool UseSjLjExceptions(const llvm::opt::ArgList &Args) const override;
+
+  bool SupportsEmbeddedBitcode() const override;
 
   SanitizerMask getSupportedSanitizers() const override;
 };
@@ -508,6 +586,15 @@ public:
 
   void AddLinkARCArgs(const llvm::opt::ArgList &Args,
                       llvm::opt::ArgStringList &CmdArgs) const override;
+
+  unsigned GetDefaultDwarfVersion() const override { return 2; }
+  // Until dtrace (via CTF) and LLDB can deal with distributed debug info,
+  // Darwin defaults to standalone/full debug info.
+  bool GetDefaultStandaloneDebug() const override { return true; }
+  llvm::DebuggerKind getDefaultDebuggerTuning() const override {
+    return llvm::DebuggerKind::LLDB;
+  }
+
   /// }
 
 private:
@@ -547,7 +634,9 @@ public:
   void AddCXXStdlibLibArgs(const llvm::opt::ArgList &Args,
                            llvm::opt::ArgStringList &CmdArgs) const override;
 
-  bool isPIEDefault() const override { return false; }
+  bool isPIEDefault() const override;
+  SanitizerMask getSupportedSanitizers() const override;
+  SanitizerMask getDefaultSanitizers() const override;
 
 protected:
   Tool *buildLinker() const override;
@@ -563,6 +652,8 @@ public:
   void AddClangCXXStdlibIncludeArgs(
       const llvm::opt::ArgList &DriverArgs,
       llvm::opt::ArgStringList &CC1Args) const override;
+
+  unsigned GetDefaultDwarfVersion() const override { return 2; }
 
 protected:
   Tool *buildAssembler() const override;
@@ -603,6 +694,18 @@ private:
   void findGccLibDir();
 };
 
+class LLVM_LIBRARY_VISIBILITY Haiku : public Generic_ELF {
+public:
+  Haiku(const Driver &D, const llvm::Triple &Triple,
+          const llvm::opt::ArgList &Args);
+
+  bool isPIEDefault() const override { return getTriple().getArch() == llvm::Triple::x86_64; }
+
+  void
+  AddClangCXXStdlibIncludeArgs(const llvm::opt::ArgList &DriverArgs,
+                              llvm::opt::ArgStringList &CC1Args) const override;
+};
+
 class LLVM_LIBRARY_VISIBILITY OpenBSD : public Generic_ELF {
 public:
   OpenBSD(const Driver &D, const llvm::Triple &Triple,
@@ -615,6 +718,7 @@ public:
   unsigned GetDefaultStackProtectorLevel(bool KernelOrKext) const override {
     return 2;
   }
+  unsigned GetDefaultDwarfVersion() const override { return 2; }
 
 protected:
   Tool *buildAssembler() const override;
@@ -629,7 +733,7 @@ public:
   bool IsMathErrnoDefault() const override { return false; }
   bool IsObjCNonFragileABIDefault() const override { return true; }
 
-  CXXStdlibType GetCXXStdlibType(const llvm::opt::ArgList &Args) const override;
+  CXXStdlibType GetDefaultCXXStdlibType() const override;
   void AddClangCXXStdlibIncludeArgs(
       const llvm::opt::ArgList &DriverArgs,
       llvm::opt::ArgStringList &CC1Args) const override;
@@ -653,14 +757,20 @@ public:
   bool IsMathErrnoDefault() const override { return false; }
   bool IsObjCNonFragileABIDefault() const override { return true; }
 
-  CXXStdlibType GetCXXStdlibType(const llvm::opt::ArgList &Args) const override;
+  CXXStdlibType GetDefaultCXXStdlibType() const override;
   void AddClangCXXStdlibIncludeArgs(
       const llvm::opt::ArgList &DriverArgs,
       llvm::opt::ArgStringList &CC1Args) const override;
+  void AddCXXStdlibLibArgs(const llvm::opt::ArgList &Args,
+                           llvm::opt::ArgStringList &CmdArgs) const override;
 
-  bool UseSjLjExceptions() const override;
+  bool UseSjLjExceptions(const llvm::opt::ArgList &Args) const override;
   bool isPIEDefault() const override;
   SanitizerMask getSupportedSanitizers() const override;
+  unsigned GetDefaultDwarfVersion() const override { return 2; }
+  // Until dtrace (via CTF) and LLDB can deal with distributed debug info,
+  // FreeBSD defaults to standalone/full debug info.
+  bool GetDefaultStandaloneDebug() const override { return true; }
 
 protected:
   Tool *buildAssembler() const override;
@@ -675,7 +785,7 @@ public:
   bool IsMathErrnoDefault() const override { return false; }
   bool IsObjCNonFragileABIDefault() const override { return true; }
 
-  CXXStdlibType GetCXXStdlibType(const llvm::opt::ArgList &Args) const override;
+  CXXStdlibType GetDefaultCXXStdlibType() const override;
 
   void AddClangCXXStdlibIncludeArgs(
       const llvm::opt::ArgList &DriverArgs,
@@ -722,26 +832,23 @@ public:
   void AddClangCXXStdlibIncludeArgs(
       const llvm::opt::ArgList &DriverArgs,
       llvm::opt::ArgStringList &CC1Args) const override;
+  void AddCudaIncludeArgs(const llvm::opt::ArgList &DriverArgs,
+                          llvm::opt::ArgStringList &CC1Args) const override;
+  void AddIAMCUIncludeArgs(const llvm::opt::ArgList &DriverArgs,
+                           llvm::opt::ArgStringList &CC1Args) const override;
   bool isPIEDefault() const override;
   SanitizerMask getSupportedSanitizers() const override;
+  void addProfileRTLibs(const llvm::opt::ArgList &Args,
+                        llvm::opt::ArgStringList &CmdArgs) const override;
+  virtual std::string computeSysRoot() const;
 
-  std::string Linker;
+  virtual std::string getDynamicLinker(const llvm::opt::ArgList &Args) const;
+
   std::vector<std::string> ExtraOpts;
 
 protected:
   Tool *buildAssembler() const override;
   Tool *buildLinker() const override;
-
-private:
-  static bool addLibStdCXXIncludePaths(Twine Base, Twine Suffix,
-                                       StringRef GCCTriple,
-                                       StringRef GCCMultiarchTriple,
-                                       StringRef TargetMultiarchTriple,
-                                       Twine IncludeSuffix,
-                                       const llvm::opt::ArgList &DriverArgs,
-                                       llvm::opt::ArgStringList &CC1Args);
-
-  std::string computeSysRoot() const;
 };
 
 class LLVM_LIBRARY_VISIBILITY CudaToolChain : public Linux {
@@ -754,6 +861,68 @@ public:
                 const char *BoundArch) const override;
   void addClangTargetOptions(const llvm::opt::ArgList &DriverArgs,
                              llvm::opt::ArgStringList &CC1Args) const override;
+
+  // Never try to use the integrated assembler with CUDA; always fork out to
+  // ptxas.
+  bool useIntegratedAs() const override { return false; }
+
+  void AddCudaIncludeArgs(const llvm::opt::ArgList &DriverArgs,
+                          llvm::opt::ArgStringList &CC1Args) const override;
+
+  const Generic_GCC::CudaInstallationDetector &cudaInstallation() const {
+    return CudaInstallation;
+  }
+  Generic_GCC::CudaInstallationDetector &cudaInstallation() {
+    return CudaInstallation;
+  }
+
+protected:
+  Tool *buildAssembler() const override;  // ptxas
+  Tool *buildLinker() const override;     // fatbinary (ok, not really a linker)
+};
+
+class LLVM_LIBRARY_VISIBILITY MipsLLVMToolChain : public Linux {
+protected:
+  Tool *buildLinker() const override;
+
+public:
+  MipsLLVMToolChain(const Driver &D, const llvm::Triple &Triple,
+                    const llvm::opt::ArgList &Args);
+
+  void
+  AddClangSystemIncludeArgs(const llvm::opt::ArgList &DriverArgs,
+                            llvm::opt::ArgStringList &CC1Args) const override;
+
+  CXXStdlibType GetCXXStdlibType(const llvm::opt::ArgList &Args) const override;
+
+  void AddClangCXXStdlibIncludeArgs(
+      const llvm::opt::ArgList &DriverArgs,
+      llvm::opt::ArgStringList &CC1Args) const override;
+
+  void AddCXXStdlibLibArgs(const llvm::opt::ArgList &Args,
+                           llvm::opt::ArgStringList &CmdArgs) const override;
+
+  std::string getCompilerRT(const llvm::opt::ArgList &Args, StringRef Component,
+                            bool Shared = false) const override;
+
+  std::string computeSysRoot() const override;
+
+  RuntimeLibType GetDefaultRuntimeLibType() const override {
+    return GCCInstallation.isValid() ? RuntimeLibType::RLT_Libgcc
+                                     : RuntimeLibType::RLT_CompilerRT;
+  }
+
+private:
+  Multilib SelectedMultilib;
+  std::string LibSuffix;
+};
+
+class LLVM_LIBRARY_VISIBILITY LanaiToolChain : public Generic_ELF {
+public:
+  LanaiToolChain(const Driver &D, const llvm::Triple &Triple,
+                 const llvm::opt::ArgList &Args)
+      : Generic_ELF(D, Triple, Args) {}
+  bool IsIntegratedAssemblerDefault() const override { return true; }
 };
 
 class LLVM_LIBRARY_VISIBILITY HexagonToolChain : public Linux {
@@ -776,15 +945,21 @@ public:
   CXXStdlibType GetCXXStdlibType(const llvm::opt::ArgList &Args) const override;
 
   StringRef GetGCCLibAndIncVersion() const { return GCCLibAndIncVersion.Text; }
+  bool IsIntegratedAssemblerDefault() const override {
+    return true;
+  }
 
-  static std::string GetGnuDir(const std::string &InstalledDir,
-                               const llvm::opt::ArgList &Args);
+  std::string getHexagonTargetDir(
+      const std::string &InstalledDir,
+      const SmallVectorImpl<std::string> &PrefixDirs) const;
+  void getHexagonLibraryPaths(const llvm::opt::ArgList &Args,
+      ToolChain::path_list &LibPaths) const;
 
-  static StringRef GetTargetCPU(const llvm::opt::ArgList &Args);
+  static const StringRef GetDefaultCPU();
+  static const StringRef GetTargetCPUVersion(const llvm::opt::ArgList &Args);
 
-  static const char *GetSmallDataThreshold(const llvm::opt::ArgList &Args);
-
-  static bool UsesG0(const char *smallDataThreshold);
+  static Optional<unsigned> getSmallDataThreshold(
+      const llvm::opt::ArgList &Args);
 };
 
 class LLVM_LIBRARY_VISIBILITY AMDGPUToolChain : public Generic_ELF {
@@ -794,6 +969,7 @@ protected:
 public:
   AMDGPUToolChain(const Driver &D, const llvm::Triple &Triple,
             const llvm::opt::ArgList &Args);
+  unsigned GetDefaultDwarfVersion() const override { return 2; }
   bool IsIntegratedAssemblerDefault() const override { return true; }
 };
 
@@ -825,7 +1001,6 @@ public:
 
   std::string ComputeEffectiveClangTriple(const llvm::opt::ArgList &Args,
                                           types::ID InputType) const override;
-  std::string Linker;
 
 protected:
   Tool *buildLinker() const override;
@@ -882,6 +1057,7 @@ public:
   bool getVisualStudioInstallDir(std::string &path) const;
   bool getVisualStudioBinariesFolder(const char *clangProgramPath,
                                      std::string &path) const;
+  VersionTuple getMSVCVersionFromExe() const override;
 
   std::string ComputeEffectiveClangTriple(const llvm::opt::ArgList &Args,
                                           types::ID InputType) const override;
@@ -923,6 +1099,8 @@ public:
   void AddCXXStdlibLibArgs(const llvm::opt::ArgList &Args,
                            llvm::opt::ArgStringList &CmdArgs) const override;
 
+  SanitizerMask getSupportedSanitizers() const override;
+
 protected:
   Tool *buildLinker() const override;
   Tool *buildAssembler() const override;
@@ -957,7 +1135,7 @@ public:
 
 /// MyriadToolChain - A tool chain using either clang or the external compiler
 /// installed by the Movidius SDK to perform all subcommands.
-class LLVM_LIBRARY_VISIBILITY MyriadToolChain : public Generic_GCC {
+class LLVM_LIBRARY_VISIBILITY MyriadToolChain : public Generic_ELF {
 public:
   MyriadToolChain(const Driver &D, const llvm::Triple &Triple,
                   const llvm::opt::ArgList &Args);
@@ -966,9 +1144,11 @@ public:
   void
   AddClangSystemIncludeArgs(const llvm::opt::ArgList &DriverArgs,
                             llvm::opt::ArgStringList &CC1Args) const override;
+  void AddClangCXXStdlibIncludeArgs(
+      const llvm::opt::ArgList &DriverArgs,
+      llvm::opt::ArgStringList &CC1Args) const override;
   Tool *SelectTool(const JobAction &JA) const override;
-  void getCompilerSupportDir(std::string &Dir) const;
-  void getBuiltinLibDir(std::string &Dir) const;
+  unsigned GetDefaultDwarfVersion() const override { return 2; }
 
 protected:
   Tool *buildLinker() const override;
@@ -984,8 +1164,7 @@ private:
 class LLVM_LIBRARY_VISIBILITY WebAssembly final : public ToolChain {
 public:
   WebAssembly(const Driver &D, const llvm::Triple &Triple,
-              const llvm::opt::ArgList &Args)
-      : ToolChain(D, Triple, Args) {}
+              const llvm::opt::ArgList &Args);
 
 private:
   bool IsMathErrnoDefault() const override;
@@ -998,8 +1177,44 @@ private:
   bool hasBlocksRuntime() const override;
   bool SupportsObjCGC() const override;
   bool SupportsProfiling() const override;
+  bool HasNativeLLVMSupport() const override;
   void addClangTargetOptions(const llvm::opt::ArgList &DriverArgs,
                              llvm::opt::ArgStringList &CC1Args) const override;
+  RuntimeLibType GetDefaultRuntimeLibType() const override;
+  CXXStdlibType GetCXXStdlibType(const llvm::opt::ArgList &Args) const override;
+  void AddClangSystemIncludeArgs(
+      const llvm::opt::ArgList &DriverArgs,
+      llvm::opt::ArgStringList &CC1Args) const override;
+  void AddClangCXXStdlibIncludeArgs(
+      const llvm::opt::ArgList &DriverArgs,
+      llvm::opt::ArgStringList &CC1Args) const override;
+
+  Tool *buildLinker() const override;
+};
+
+class LLVM_LIBRARY_VISIBILITY PS4CPU : public Generic_ELF {
+public:
+  PS4CPU(const Driver &D, const llvm::Triple &Triple,
+         const llvm::opt::ArgList &Args);
+
+  bool IsMathErrnoDefault() const override { return false; }
+  bool IsObjCNonFragileABIDefault() const override { return true; }
+  bool HasNativeLLVMSupport() const override;
+  bool isPICDefault() const override;
+
+  unsigned GetDefaultStackProtectorLevel(bool KernelOrKext) const override {
+    return 2; // SSPStrong
+  }
+
+  llvm::DebuggerKind getDefaultDebuggerTuning() const override {
+    return llvm::DebuggerKind::SCE;
+  }
+
+  SanitizerMask getSupportedSanitizers() const override;
+
+protected:
+  Tool *buildAssembler() const override;
+  Tool *buildLinker() const override;
 };
 
 } // end namespace toolchains

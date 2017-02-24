@@ -1,11 +1,13 @@
-; RUN: llc < %s -march=amdgcn -mcpu=SI -verify-machineinstrs | FileCheck %s --check-prefix=SI --check-prefix=GCN --check-prefix=FUNC
+; RUN: llc < %s -march=amdgcn -verify-machineinstrs | FileCheck %s --check-prefix=SI --check-prefix=GCN --check-prefix=FUNC
 ; RUN: llc < %s -march=amdgcn -mcpu=tonga -verify-machineinstrs | FileCheck %s --check-prefix=VI --check-prefix=GCN --check-prefix=FUNC
 ; RUN: llc < %s -march=r600 -mcpu=redwood | FileCheck %s --check-prefix=EG --check-prefix=FUNC
 ; RUN: llc < %s -march=r600 -mcpu=cayman | FileCheck %s --check-prefix=EG --check-prefix=FUNC
 
 ; FUNC-LABEL: {{^}}i8_arg:
-; EG: MOV {{[ *]*}}T{{[0-9]+\.[XYZW]}}, KC0[2].Z
-; GCN: buffer_load_ubyte
+; EG: AND_INT {{[ *]*}}T{{[0-9]+\.[XYZW]}}, KC0[2].Z
+; SI: s_load_dword [[VAL:s[0-9]+]], s[{{[0-9]+:[0-9]+}}], 0xb
+; VI: s_load_dword [[VAL:s[0-9]+]], s[{{[0-9]+:[0-9]+}}], 0x2c
+; GCN: s_and_b32 s{{[0-9]+}}, [[VAL]], 0xff
 
 define void @i8_arg(i32 addrspace(1)* nocapture %out, i8 %in) nounwind {
 entry:
@@ -39,8 +41,10 @@ entry:
 }
 
 ; FUNC-LABEL: {{^}}i16_arg:
-; EG: MOV {{[ *]*}}T{{[0-9]+\.[XYZW]}}, KC0[2].Z
-; GCN: buffer_load_ushort
+; EG: AND_INT {{[ *]*}}T{{[0-9]+\.[XYZW]}}, KC0[2].Z
+; SI: s_load_dword [[VAL:s[0-9]+]], s[{{[0-9]+:[0-9]+}}], 0xb
+; VI: s_load_dword [[VAL:s[0-9]+]], s[{{[0-9]+:[0-9]+}}], 0x2c
+; GCN: s_and_b32 s{{[0-9]+}}, [[VAL]], 0xff
 
 define void @i16_arg(i32 addrspace(1)* nocapture %out, i16 %in) nounwind {
 entry:
@@ -290,8 +294,8 @@ entry:
 ; EG-DAG: T{{[0-9]\.[XYZW]}}, KC0[5].Z
 ; EG-DAG: T{{[0-9]\.[XYZW]}}, KC0[5].W
 ; EG-DAG: T{{[0-9]\.[XYZW]}}, KC0[6].X
-; SI: s_load_dwordx8 s{{\[[0-9]:[0-9]+\]}}, s[0:1], 0x11
-; VI: s_load_dwordx8 s{{\[[0-9]:[0-9]+\]}}, s[0:1], 0x44
+; SI: s_load_dwordx8 s{{\[[0-9]+:[0-9]+\]}}, s[0:1], 0x11
+; VI: s_load_dwordx8 s{{\[[0-9]+:[0-9]+\]}}, s[0:1], 0x44
 define void @v8i32_arg(<8 x i32> addrspace(1)* nocapture %out, <8 x i32> %in) nounwind {
 entry:
   store <8 x i32> %in, <8 x i32> addrspace(1)* %out, align 4
@@ -307,7 +311,7 @@ entry:
 ; EG-DAG: T{{[0-9]\.[XYZW]}}, KC0[5].Z
 ; EG-DAG: T{{[0-9]\.[XYZW]}}, KC0[5].W
 ; EG-DAG: T{{[0-9]\.[XYZW]}}, KC0[6].X
-; SI: s_load_dwordx8 s{{\[[0-9]:[0-9]+\]}}, s[0:1], 0x11
+; SI: s_load_dwordx8 s{{\[[0-9]+:[0-9]+\]}}, s[0:1], 0x11
 define void @v8f32_arg(<8 x float> addrspace(1)* nocapture %out, <8 x float> %in) nounwind {
 entry:
   store <8 x float> %in, <8 x float> addrspace(1)* %out, align 4
@@ -409,8 +413,8 @@ entry:
 ; EG-DAG: T{{[0-9]\.[XYZW]}}, KC0[9].Z
 ; EG-DAG: T{{[0-9]\.[XYZW]}}, KC0[9].W
 ; EG-DAG: T{{[0-9]\.[XYZW]}}, KC0[10].X
-; SI: s_load_dwordx16 s{{\[[0-9]:[0-9]+\]}}, s[0:1], 0x19
-; VI: s_load_dwordx16 s{{\[[0-9]:[0-9]+\]}}, s[0:1], 0x64
+; SI: s_load_dwordx16 s{{\[[0-9]+:[0-9]+\]}}, s[0:1], 0x19
+; VI: s_load_dwordx16 s{{\[[0-9]+:[0-9]+\]}}, s[0:1], 0x64
 define void @v16i32_arg(<16 x i32> addrspace(1)* nocapture %out, <16 x i32> %in) nounwind {
 entry:
   store <16 x i32> %in, <16 x i32> addrspace(1)* %out, align 4
@@ -434,8 +438,8 @@ entry:
 ; EG-DAG: T{{[0-9]\.[XYZW]}}, KC0[9].Z
 ; EG-DAG: T{{[0-9]\.[XYZW]}}, KC0[9].W
 ; EG-DAG: T{{[0-9]\.[XYZW]}}, KC0[10].X
-; SI: s_load_dwordx16 s{{\[[0-9]:[0-9]+\]}}, s[0:1], 0x19
-; VI: s_load_dwordx16 s{{\[[0-9]:[0-9]+\]}}, s[0:1], 0x64
+; SI: s_load_dwordx16 s{{\[[0-9]+:[0-9]+\]}}, s[0:1], 0x19
+; VI: s_load_dwordx16 s{{\[[0-9]+:[0-9]+\]}}, s[0:1], 0x64
 define void @v16f32_arg(<16 x float> addrspace(1)* nocapture %out, <16 x float> %in) nounwind {
 entry:
   store <16 x float> %in, <16 x float> addrspace(1)* %out, align 4
@@ -471,3 +475,55 @@ entry:
 ;   store <1 x i64> %a, <1 x i64> addrspace(1)* %out, align 8
 ;   ret void
 ; }
+
+; FUNC-LABEL: {{^}}i1_arg:
+; SI: buffer_load_ubyte
+; SI: v_and_b32_e32
+; SI: buffer_store_byte
+; SI: s_endpgm
+define void @i1_arg(i1 addrspace(1)* %out, i1 %x) nounwind {
+  store i1 %x, i1 addrspace(1)* %out, align 1
+  ret void
+}
+
+; FUNC-LABEL: {{^}}i1_arg_zext_i32:
+; SI: buffer_load_ubyte
+; SI: buffer_store_dword
+; SI: s_endpgm
+define void @i1_arg_zext_i32(i32 addrspace(1)* %out, i1 %x) nounwind {
+  %ext = zext i1 %x to i32
+  store i32 %ext, i32 addrspace(1)* %out, align 4
+  ret void
+}
+
+; FUNC-LABEL: {{^}}i1_arg_zext_i64:
+; SI: buffer_load_ubyte
+; SI: buffer_store_dwordx2
+; SI: s_endpgm
+define void @i1_arg_zext_i64(i64 addrspace(1)* %out, i1 %x) nounwind {
+  %ext = zext i1 %x to i64
+  store i64 %ext, i64 addrspace(1)* %out, align 8
+  ret void
+}
+
+; FUNC-LABEL: {{^}}i1_arg_sext_i32:
+; SI: buffer_load_ubyte
+; SI: buffer_store_dword
+; SI: s_endpgm
+define void @i1_arg_sext_i32(i32 addrspace(1)* %out, i1 %x) nounwind {
+  %ext = sext i1 %x to i32
+  store i32 %ext, i32addrspace(1)* %out, align 4
+  ret void
+}
+
+; FUNC-LABEL: {{^}}i1_arg_sext_i64:
+; SI: buffer_load_ubyte
+; SI: v_bfe_i32
+; SI: v_ashrrev_i32
+; SI: buffer_store_dwordx2
+; SI: s_endpgm
+define void @i1_arg_sext_i64(i64 addrspace(1)* %out, i1 %x) nounwind {
+  %ext = sext i1 %x to i64
+  store i64 %ext, i64 addrspace(1)* %out, align 8
+  ret void
+}

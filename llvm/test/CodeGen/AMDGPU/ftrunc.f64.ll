@@ -24,17 +24,17 @@ define void @v_ftrunc_f64(double addrspace(1)* %out, double addrspace(1)* %in) {
 ; CI: v_trunc_f64_e32
 
 ; SI: s_bfe_u32 [[SEXP:s[0-9]+]], {{s[0-9]+}}, 0xb0014
-; SI: s_and_b32 s{{[0-9]+}}, s{{[0-9]+}}, 0x80000000
-; SI: s_add_i32 s{{[0-9]+}}, [[SEXP]], 0xfffffc01
-; SI: s_lshr_b64
-; SI: s_not_b64
-; SI: s_and_b64
-; SI: cmp_gt_i32
-; SI: cndmask_b32
-; SI: cndmask_b32
-; SI: cmp_lt_i32
-; SI: cndmask_b32
-; SI: cndmask_b32
+; SI-DAG: s_and_b32 s{{[0-9]+}}, s{{[0-9]+}}, 0x80000000
+; SI-DAG: s_add_i32 [[SEXP1:s[0-9]+]], [[SEXP]], 0xfffffc01
+; SI-DAG: s_lshr_b64 s[{{[0-9]+:[0-9]+}}], s[{{[0-9]+:[0-9]+}}], [[SEXP1]]
+; SI-DAG: s_not_b64
+; SI-DAG: s_and_b64
+; SI-DAG: cmp_gt_i32
+; SI-DAG: cndmask_b32
+; SI-DAG: cndmask_b32
+; SI-DAG: cmp_lt_i32
+; SI-DAG: cndmask_b32
+; SI-DAG: cndmask_b32
 ; SI: s_endpgm
 define void @ftrunc_f64(double addrspace(1)* %out, double %x) {
   %y = call double @llvm.trunc.f64(double %x) nounwind readnone

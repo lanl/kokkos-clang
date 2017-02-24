@@ -59,12 +59,6 @@ namespace {
 
     bool runOnFunction(Function &F) override;
 
-    void getAnalysisUsage(AnalysisUsage &AU) const override {
-      // This is a cluster of orthogonal Transforms
-      AU.addPreserved<UnifyFunctionExitNodes>();
-      AU.addPreservedID(LowerInvokePassID);
-    }
-
     struct CaseRange {
       ConstantInt* Low;
       ConstantInt* High;
@@ -118,7 +112,7 @@ bool LowerSwitch::runOnFunction(Function &F) {
   SmallPtrSet<BasicBlock*, 8> DeleteList;
 
   for (Function::iterator I = F.begin(), E = F.end(); I != E; ) {
-    BasicBlock *Cur = I++; // Advance over block so we don't traverse new blocks
+    BasicBlock *Cur = &*I++; // Advance over block so we don't traverse new blocks
 
     // If the block is a dead Default block that will be deleted later, don't
     // waste time processing it.
@@ -167,7 +161,8 @@ static raw_ostream& operator<<(raw_ostream &O,
 /// number of phi values equal to the number of branches to SuccBB.
 static void fixPhis(BasicBlock *SuccBB, BasicBlock *OrigBB, BasicBlock *NewBB,
                     unsigned NumMergedCases) {
-  for (BasicBlock::iterator I = SuccBB->begin(), IE = SuccBB->getFirstNonPHI();
+  for (BasicBlock::iterator I = SuccBB->begin(),
+                            IE = SuccBB->getFirstNonPHI()->getIterator();
        I != IE; ++I) {
     PHINode *PN = cast<PHINode>(I);
 
@@ -191,8 +186,8 @@ static void fixPhis(BasicBlock *SuccBB, BasicBlock *OrigBB, BasicBlock *NewBB,
       }
     // Remove incoming values in the reverse order to prevent invalidating
     // *successive* index.
-    for (auto III = Indices.rbegin(), IIE = Indices.rend(); III != IIE; ++III)
-      PN->removeIncomingValue(*III);
+    for (unsigned III : reverse(Indices))
+      PN->removeIncomingValue(III);
   }
 }
 
@@ -286,8 +281,7 @@ LowerSwitch::switchConvert(CaseItr Begin, CaseItr End, ConstantInt *LowerBound,
                                       UpperBound, Val, NewNode, OrigBlock,
                                       Default, UnreachableRanges);
 
-  Function::iterator FI = OrigBlock;
-  F->getBasicBlockList().insert(++FI, NewNode);
+  F->getBasicBlockList().insert(++OrigBlock->getIterator(), NewNode);
   NewNode->getInstList().push_back(Comp);
 
   BranchInst::Create(LBranch, RBranch, Comp, NewNode);
@@ -304,8 +298,7 @@ BasicBlock* LowerSwitch::newLeafBlock(CaseRange& Leaf, Value* Val,
 {
   Function* F = OrigBlock->getParent();
   BasicBlock* NewLeaf = BasicBlock::Create(Val->getContext(), "LeafBlock");
-  Function::iterator FI = OrigBlock;
-  F->getBasicBlockList().insert(++FI, NewLeaf);
+  F->getBasicBlockList().insert(++OrigBlock->getIterator(), NewLeaf);
 
   // Emit comparison
   ICmpInst* Comp = nullptr;
@@ -501,7 +494,7 @@ void LowerSwitch::processSwitchInst(SwitchInst *SI,
   // Create a new, empty default block so that the new hierarchy of
   // if-then statements go to this and the PHI nodes are happy.
   BasicBlock *NewDefault = BasicBlock::Create(SI->getContext(), "NewDefault");
-  F->getBasicBlockList().insert(Default, NewDefault);
+  F->getBasicBlockList().insert(Default->getIterator(), NewDefault);
   BranchInst::Create(Default, NewDefault);
 
   // If there is an entry in any PHI nodes for the default edge, make sure

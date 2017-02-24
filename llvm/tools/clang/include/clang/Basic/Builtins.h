@@ -16,6 +16,7 @@
 #ifndef LLVM_CLANG_BASIC_BUILTINS_H
 #define LLVM_CLANG_BASIC_BUILTINS_H
 
+#include "llvm/ADT/ArrayRef.h"
 #include <cstring>
 
 // VC++ defines 'alloca' as an object-like macro, which interferes with our
@@ -30,11 +31,12 @@ class QualType;
 class LangOptions;
 
 enum LanguageID {
-  GNU_LANG = 0x1,  // builtin requires GNU mode.
-  C_LANG = 0x2,    // builtin for c only.
-  CXX_LANG = 0x4,  // builtin for cplusplus only.
-  OBJC_LANG = 0x8, // builtin for objective-c and objective-c++
-  MS_LANG = 0x10,  // builtin requires MS mode.
+  GNU_LANG = 0x1,     // builtin requires GNU mode.
+  C_LANG = 0x2,       // builtin for c only.
+  CXX_LANG = 0x4,     // builtin for cplusplus only.
+  OBJC_LANG = 0x8,    // builtin for objective-c and objective-c++
+  MS_LANG = 0x10,     // builtin requires MS mode.
+  OCLC20_LANG = 0x20, // builtin for OpenCL C only.
   ALL_LANGUAGES = C_LANG | CXX_LANG | OBJC_LANG, // builtin for all languages.
   ALL_GNU_LANGUAGES = ALL_LANGUAGES | GNU_LANG,  // builtin requires GNU mode.
   ALL_MS_LANGUAGES = ALL_LANGUAGES | MS_LANG     // builtin requires MS mode.
@@ -58,16 +60,14 @@ struct Info {
 /// target-specific builtins, allowing easy queries by clients.
 ///
 /// Builtins from an optional auxiliary target are stored in
-/// AuxTSRecords. Their IDs are shifted up by NumTSRecords and need to
+/// AuxTSRecords. Their IDs are shifted up by TSRecords.size() and need to
 /// be translated back with getAuxBuiltinID() before use.
 class Context {
-  const Info *TSRecords;
-  const Info *AuxTSRecords;
-  unsigned NumTSRecords;
-  unsigned NumAuxTSRecords;
+  llvm::ArrayRef<Info> TSRecords;
+  llvm::ArrayRef<Info> AuxTSRecords;
 
 public:
-  Context();
+  Context() {}
 
   /// \brief Perform target-specific initialization
   /// \param AuxTarget Target info to incorporate builtins from. May be nullptr.
@@ -89,9 +89,14 @@ public:
     return getRecord(ID).Type;
   }
 
-  /// \brief Return true if this function is a target-specific builtin
+  /// \brief Return true if this function is a target-specific builtin.
   bool isTSBuiltin(unsigned ID) const {
     return ID >= Builtin::FirstTSBuiltin;
+  }
+
+  /// \brief Return true if this function has no side effects.
+  bool isPure(unsigned ID) const {
+    return strchr(getRecord(ID).Attributes, 'U') != nullptr;
   }
 
   /// \brief Return true if this function has no side effects and doesn't
@@ -155,7 +160,7 @@ public:
   /// \brief Completely forget that the given ID was ever considered a builtin,
   /// e.g., because the user provided a conflicting signature.
   void forgetBuiltin(unsigned ID, IdentifierTable &Table);
-  
+
   /// \brief If this is a library function that comes from a specific
   /// header, retrieve that header name.
   const char *getHeaderName(unsigned ID) const {
@@ -186,12 +191,16 @@ public:
 
   /// \brief Return true if builtin ID belongs to AuxTarget.
   bool isAuxBuiltinID(unsigned ID) const {
-    return ID >= (Builtin::FirstTSBuiltin + NumTSRecords);
+    return ID >= (Builtin::FirstTSBuiltin + TSRecords.size());
   }
 
   /// Return real buitin ID (i.e. ID it would have furing compilation
   /// for AuxTarget).
-  unsigned getAuxBuiltinID(unsigned ID) const { return ID - NumTSRecords; }
+  unsigned getAuxBuiltinID(unsigned ID) const { return ID - TSRecords.size(); }
+
+  /// Returns true if this is a libc/libm function without the '__builtin_'
+  /// prefix.
+  static bool isBuiltinFunc(const char *Name);
 
 private:
   const Info &getRecord(unsigned ID) const;
@@ -206,5 +215,15 @@ private:
 };
 
 }
+
+/// \brief Kinds of BuiltinTemplateDecl.
+enum BuiltinTemplateKind : int {
+  /// \brief This names the __make_integer_seq BuiltinTemplateDecl.
+  BTK__make_integer_seq,
+
+  /// \brief This names the __type_pack_element BuiltinTemplateDecl.
+  BTK__type_pack_element
+};
+
 } // end namespace clang
 #endif

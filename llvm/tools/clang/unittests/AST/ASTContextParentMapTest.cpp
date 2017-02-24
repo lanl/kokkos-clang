@@ -21,10 +21,6 @@
 namespace clang {
 namespace ast_matchers {
 
-using clang::tooling::newFrontendActionFactory;
-using clang::tooling::runToolOnCodeWithArgs;
-using clang::tooling::FrontendActionFactory;
-
 TEST(GetParents, ReturnsParentForDecl) {
   MatchVerifier<Decl> Verifier;
   EXPECT_TRUE(
@@ -36,6 +32,19 @@ TEST(GetParents, ReturnsParentForStmt) {
   MatchVerifier<Stmt> Verifier;
   EXPECT_TRUE(Verifier.match("class C { void f() { if (true) {} } };",
                              ifStmt(hasParent(compoundStmt()))));
+}
+
+TEST(GetParents, ReturnsParentForTypeLoc) {
+  MatchVerifier<TypeLoc> Verifier;
+  EXPECT_TRUE(
+      Verifier.match("namespace a { class b {}; } void f(a::b) {}",
+                     typeLoc(hasParent(typeLoc(hasParent(functionDecl()))))));
+}
+
+TEST(GetParents, ReturnsParentForNestedNameSpecifierLoc) {
+  MatchVerifier<NestedNameSpecifierLoc> Verifier;
+  EXPECT_TRUE(Verifier.match("namespace a { class b {}; } void f(a::b) {}",
+                             nestedNameSpecifierLoc(hasParent(typeLoc()))));
 }
 
 TEST(GetParents, ReturnsParentInsideTemplateInstantiations) {

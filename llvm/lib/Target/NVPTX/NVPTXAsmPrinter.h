@@ -18,14 +18,14 @@
 #include "NVPTX.h"
 #include "NVPTXSubtarget.h"
 #include "NVPTXTargetMachine.h"
-#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/CodeGen/AsmPrinter.h"
+#include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCExpr.h"
+#include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FormattedStream.h"
 #include "llvm/Target/TargetMachine.h"
 #include <fstream>
@@ -212,28 +212,21 @@ private:
   MCOperand GetSymbolRef(const MCSymbol *Symbol);
   unsigned encodeVirtualRegister(unsigned Reg);
 
-  void EmitAlignment(unsigned NumBits, const GlobalValue *GV = nullptr) const {}
-
   void printVecModifiedImmediate(const MachineOperand &MO, const char *Modifier,
                                  raw_ostream &O);
   void printMemOperand(const MachineInstr *MI, int opNum, raw_ostream &O,
                        const char *Modifier = nullptr);
-  void printImplicitDef(const MachineInstr *MI, raw_ostream &O) const;
   void printModuleLevelGV(const GlobalVariable *GVar, raw_ostream &O,
                           bool = false);
-  void printParamName(int paramIndex, raw_ostream &O);
   void printParamName(Function::const_arg_iterator I, int paramIndex,
                       raw_ostream &O);
   void emitGlobals(const Module &M);
   void emitHeader(Module &M, raw_ostream &O, const NVPTXSubtarget &STI);
   void emitKernelFunctionDirectives(const Function &F, raw_ostream &O) const;
   void emitVirtualRegister(unsigned int vr, raw_ostream &);
-  void emitFunctionExternParamList(const MachineFunction &MF);
   void emitFunctionParamList(const Function *, raw_ostream &O);
   void emitFunctionParamList(const MachineFunction &MF, raw_ostream &O);
   void setAndEmitFunctionVirtualRegisters(const MachineFunction &MF);
-  void emitFunctionTempData(const MachineFunction &MF, unsigned &FrameSize);
-  bool isImageType(Type *Ty);
   void printReturnValStr(const Function *, raw_ostream &O);
   void printReturnValStr(const MachineFunction &MF, raw_ostream &O);
   bool PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
@@ -288,13 +281,9 @@ private:
   void bufferLEByte(const Constant *CPV, int Bytes, AggBuffer *aggBuffer);
   void bufferAggregateConstant(const Constant *CV, AggBuffer *aggBuffer);
 
-  void printOperandProper(const MachineOperand &MO);
-
   void emitLinkageDirective(const GlobalValue *V, raw_ostream &O);
   void emitDeclarations(const Module &, raw_ostream &O);
   void emitDeclaration(const Function *, raw_ostream &O);
-
-  static const char *getRegisterName(unsigned RegNo);
   void emitDemotedVars(const Function *, raw_ostream &);
 
   bool lowerImageHandleOperand(const MachineInstr *MI, unsigned OpNo,
@@ -304,7 +293,7 @@ private:
   bool isLoopHeaderOfNoUnroll(const MachineBasicBlock &MBB) const;
 
   LineReader *reader;
-  LineReader *getReader(std::string);
+  LineReader *getReader(const std::string &);
 
   // Used to control the need to emit .generic() in the initializer of
   // module scope variables.

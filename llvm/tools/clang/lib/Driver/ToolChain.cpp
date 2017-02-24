@@ -9,6 +9,7 @@
 
 #include "Tools.h"
 #include "clang/Basic/ObjCRuntime.h"
+#include "clang/Config/config.h"
 #include "clang/Driver/Action.h"
 #include "clang/Driver/Driver.h"
 #include "clang/Driver/DriverDiagnostic.h"
@@ -23,8 +24,12 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/TargetRegistry.h"
+#include "llvm/Support/TargetParser.h"
+
 using namespace clang::driver;
+using namespace clang::driver::tools;
 using namespace clang;
+using namespace llvm;
 using namespace llvm::opt;
 
 static llvm::opt::Arg *GetRTTIArgument(const ArgList &Args) {
@@ -73,9 +78,7 @@ ToolChain::ToolChain(const Driver &D, const llvm::Triple &T,
 ToolChain::~ToolChain() {
 }
 
-const Driver &ToolChain::getDriver() const {
- return D;
-}
+vfs::FileSystem &ToolChain::getVFS() const { return getDriver().getVFS(); }
 
 bool ToolChain::useIntegratedAs() const {
   return Args.hasFlag(options::OPT_fintegrated_as,
@@ -245,8 +248,7 @@ Tool *ToolChain::getTool(Action::ActionClass AC) const {
 
   case Action::InputClass:
   case Action::BindArchClass:
-  case Action::CudaDeviceClass:
-  case Action::CudaHostClass:
+  case Action::OffloadClass:
   case Action::LipoJobClass:
   case Action::DsymutilJobClass:
   case Action::VerifyDebugInfoJobClass:
@@ -265,9 +267,64 @@ Tool *ToolChain::getTool(Action::ActionClass AC) const {
   llvm_unreachable("Invalid tool kind.");
 }
 
+static StringRef getArchNameForCompilerRTLib(const ToolChain &TC,
+                                             const ArgList &Args) {
+  const llvm::Triple &Triple = TC.getTriple();
+  bool IsWindows = Triple.isOSWindows();
+
+  if (Triple.isWindowsMSVCEnvironment() && TC.getArch() == llvm::Triple::x86)
+    return "i386";
+
+  if (TC.getArch() == llvm::Triple::arm || TC.getArch() == llvm::Triple::armeb)
+    return (arm::getARMFloatABI(TC, Args) == arm::FloatABI::Hard && !IsWindows)
+               ? "armhf"
+               : "arm";
+
+  return TC.getArchName();
+}
+
+std::string ToolChain::getCompilerRT(const ArgList &Args, StringRef Component,
+                                     bool Shared) const {
+  const llvm::Triple &TT = getTriple();
+  const char *Env = TT.isAndroid() ? "-android" : "";
+  bool IsITANMSVCWindows =
+      TT.isWindowsMSVCEnvironment() || TT.isWindowsItaniumEnvironment();
+
+  StringRef Arch = getArchNameForCompilerRTLib(*this, Args);
+  const char *Prefix = IsITANMSVCWindows ? "" : "lib";
+  const char *Suffix = Shared ? (Triple.isOSWindows() ? ".dll" : ".so")
+                              : (IsITANMSVCWindows ? ".lib" : ".a");
+
+  SmallString<128> Path(getDriver().ResourceDir);
+  StringRef OSLibName = Triple.isOSFreeBSD() ? "freebsd" : getOS();
+  llvm::sys::path::append(Path, "lib", OSLibName);
+  llvm::sys::path::append(Path, Prefix + Twine("clang_rt.") + Component + "-" +
+                                    Arch + Env + Suffix);
+  return Path.str();
+}
+
+const char *ToolChain::getCompilerRTArgString(const llvm::opt::ArgList &Args,
+                                              StringRef Component,
+                                              bool Shared) const {
+  return Args.MakeArgString(getCompilerRT(Args, Component, Shared));
+}
+
+bool ToolChain::needsProfileRT(const ArgList &Args) {
+  if (Args.hasFlag(options::OPT_fprofile_arcs, options::OPT_fno_profile_arcs,
+                   false) ||
+      Args.hasArg(options::OPT_fprofile_generate) ||
+      Args.hasArg(options::OPT_fprofile_generate_EQ) ||
+      Args.hasArg(options::OPT_fprofile_instr_generate) ||
+      Args.hasArg(options::OPT_fprofile_instr_generate_EQ) ||
+      Args.hasArg(options::OPT_fcreate_profile) ||
+      Args.hasArg(options::OPT_coverage))
+    return true;
+
+  return false;
+}
+
 Tool *ToolChain::SelectTool(const JobAction &JA) const {
-  if (getDriver().ShouldUseClangCompiler(JA))
-    return getClang();
+  if (getDriver().ShouldUseClangCompiler(JA)) return getClang();
   Action::ActionClass AC = JA.getKind();
   if (AC == Action::AssembleJobClass && useIntegratedAs())
     return getClangAs();
@@ -276,7 +333,6 @@ Tool *ToolChain::SelectTool(const JobAction &JA) const {
 
 std::string ToolChain::GetFilePath(const char *Name) const {
   return D.GetFilePath(Name, *this);
-
 }
 
 std::string ToolChain::GetProgramPath(const char *Name) const {
@@ -285,27 +341,33 @@ std::string ToolChain::GetProgramPath(const char *Name) const {
 
 std::string ToolChain::GetLinkerPath() const {
   if (Arg *A = Args.getLastArg(options::OPT_fuse_ld_EQ)) {
-    StringRef Suffix = A->getValue();
+    StringRef UseLinker = A->getValue();
 
-    // If we're passed -fuse-ld= with no argument, or with the argument ld,
-    // then use whatever the default system linker is.
-    if (Suffix.empty() || Suffix == "ld")
-      return GetProgramPath("ld");
+    if (llvm::sys::path::is_absolute(UseLinker)) {
+      // If we're passed -fuse-ld= with what looks like an absolute path,
+      // don't attempt to second-guess that.
+      if (llvm::sys::fs::exists(UseLinker))
+        return UseLinker;
+    } else {
+      // If we're passed -fuse-ld= with no argument, or with the argument ld,
+      // then use whatever the default system linker is.
+      if (UseLinker.empty() || UseLinker == "ld")
+        return GetProgramPath("ld");
 
-    llvm::SmallString<8> LinkerName("ld.");
-    LinkerName.append(Suffix);
+      llvm::SmallString<8> LinkerName("ld.");
+      LinkerName.append(UseLinker);
 
-    std::string LinkerPath(GetProgramPath(LinkerName.c_str()));
-    if (llvm::sys::fs::exists(LinkerPath))
-      return LinkerPath;
+      std::string LinkerPath(GetProgramPath(LinkerName.c_str()));
+      if (llvm::sys::fs::exists(LinkerPath))
+        return LinkerPath;
+    }
 
     getDriver().Diag(diag::err_drv_invalid_linker_name) << A->getAsString(Args);
     return "";
   }
 
-  return GetProgramPath("ld");
+  return GetProgramPath(DefaultLinker);
 }
-
 
 types::ID ToolChain::LookupTypeForExtension(const char *Ext) const {
   return types::lookupTypeForExtension(Ext);
@@ -412,9 +474,9 @@ std::string ToolChain::ComputeLLVMTriple(const ArgList &Args,
             : tools::arm::getARMTargetCPU(MCPU, MArch, Triple);
     StringRef Suffix =
       tools::arm::getLLVMArchSuffixForARM(CPU, MArch, Triple);
-    bool ThumbDefault = Suffix.startswith("v6m") || Suffix.startswith("v7m") ||
-      Suffix.startswith("v7em") ||
-      (Suffix.startswith("v7") && getTriple().isOSBinFormatMachO());
+    bool IsMProfile = ARM::parseArchProfile(Suffix) == ARM::PK_M;
+    bool ThumbDefault = IsMProfile || (ARM::parseArchVersion(Suffix) == 7 && 
+                                       getTriple().isOSBinFormatMachO());
     // FIXME: this is invalid for WindowsCE
     if (getTriple().isOSWindows())
       ThumbDefault = true;
@@ -424,10 +486,9 @@ std::string ToolChain::ComputeLLVMTriple(const ArgList &Args,
     else
       ArchName = "arm";
 
-    // Assembly files should start in ARM mode.
-    if (InputType != types::TY_PP_Asm &&
-        Args.hasFlag(options::OPT_mthumb, options::OPT_mno_thumb, ThumbDefault))
-    {
+    // Assembly files should start in ARM mode, unless arch is M-profile.
+    if ((InputType != types::TY_PP_Asm && Args.hasFlag(options::OPT_mthumb,
+         options::OPT_mno_thumb, ThumbDefault)) || IsMProfile) {
       if (IsBigEndian)
         ArchName = "thumbeb";
       else
@@ -456,9 +517,15 @@ void ToolChain::addClangTargetOptions(const ArgList &DriverArgs,
 
 void ToolChain::addClangWarningOptions(ArgStringList &CC1Args) const {}
 
+void ToolChain::addProfileRTLibs(const llvm::opt::ArgList &Args,
+                                 llvm::opt::ArgStringList &CmdArgs) const {
+  if (!needsProfileRT(Args)) return;
+
+  CmdArgs.push_back(getCompilerRTArgString(Args, "profile"));
+}
+
 ToolChain::RuntimeLibType ToolChain::GetRuntimeLibType(
-  const ArgList &Args) const
-{
+    const ArgList &Args) const {
   if (Arg *A = Args.getLastArg(options::OPT_rtlib_EQ)) {
     StringRef Value = A->getValue();
     if (Value == "compiler-rt")
@@ -472,18 +539,41 @@ ToolChain::RuntimeLibType ToolChain::GetRuntimeLibType(
   return GetDefaultRuntimeLibType();
 }
 
+static bool ParseCXXStdlibType(const StringRef& Name,
+                               ToolChain::CXXStdlibType& Type) {
+  if (Name == "libc++")
+    Type = ToolChain::CST_Libcxx;
+  else if (Name == "libstdc++")
+    Type = ToolChain::CST_Libstdcxx;
+  else
+    return false;
+
+  return true;
+}
+
 ToolChain::CXXStdlibType ToolChain::GetCXXStdlibType(const ArgList &Args) const{
-  if (Arg *A = Args.getLastArg(options::OPT_stdlib_EQ)) {
+  ToolChain::CXXStdlibType Type;
+  bool HasValidType = false;
+  bool ForcePlatformDefault = false;
+
+  const Arg *A = Args.getLastArg(options::OPT_stdlib_EQ);
+  if (A) {
     StringRef Value = A->getValue();
-    if (Value == "libc++")
-      return ToolChain::CST_Libcxx;
-    if (Value == "libstdc++")
-      return ToolChain::CST_Libstdcxx;
-    getDriver().Diag(diag::err_drv_invalid_stdlib_name)
-      << A->getAsString(Args);
+    HasValidType = ParseCXXStdlibType(Value, Type);
+
+    // Only use in tests to override CLANG_DEFAULT_CXX_STDLIB!
+    if (Value == "platform")
+      ForcePlatformDefault = true;
+    else if (!HasValidType)
+      getDriver().Diag(diag::err_drv_invalid_stdlib_name)
+        << A->getAsString(Args);
   }
 
-  return ToolChain::CST_Libstdcxx;
+  if (!HasValidType && (ForcePlatformDefault ||
+      !ParseCXXStdlibType(CLANG_DEFAULT_CXX_STDLIB, Type)))
+    Type = GetDefaultCXXStdlibType();
+
+  return Type;
 }
 
 /// \brief Utility function to add a system include directory to CC1 arguments.
@@ -555,6 +645,13 @@ void ToolChain::AddCXXStdlibLibArgs(const ArgList &Args,
   }
 }
 
+void ToolChain::AddFilePathLibArgs(const ArgList &Args,
+                                   ArgStringList &CmdArgs) const {
+  for (const auto &LibPath : getFilePaths())
+    if(LibPath.length() > 0)
+      CmdArgs.push_back(Args.MakeArgString(StringRef("-L") + LibPath));
+}
+
 void ToolChain::AddCCKextLibArgs(const ArgList &Args,
                                  ArgStringList &CmdArgs) const {
   CmdArgs.push_back("-lcc_kext");
@@ -595,3 +692,9 @@ SanitizerMask ToolChain::getSupportedSanitizers() const {
     Res |= CFIICall;
   return Res;
 }
+
+void ToolChain::AddCudaIncludeArgs(const ArgList &DriverArgs,
+                                   ArgStringList &CC1Args) const {}
+
+void ToolChain::AddIAMCUIncludeArgs(const ArgList &DriverArgs,
+                                    ArgStringList &CC1Args) const {}

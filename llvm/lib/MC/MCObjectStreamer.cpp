@@ -20,6 +20,7 @@
 #include "llvm/MC/MCSection.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetRegistry.h"
 using namespace llvm;
 
@@ -39,32 +40,31 @@ MCObjectStreamer::~MCObjectStreamer() {
 }
 
 void MCObjectStreamer::flushPendingLabels(MCFragment *F, uint64_t FOffset) {
-  if (PendingLabels.size()) {
-    if (!F) {
-      F = new MCDataFragment();
-      MCSection *CurSection = getCurrentSectionOnly();
-      CurSection->getFragmentList().insert(CurInsertionPoint, F);
-      F->setParent(CurSection);
-    }
-    for (MCSymbol *Sym : PendingLabels) {
-      Sym->setFragment(F);
-      Sym->setOffset(FOffset);
-    }
-    PendingLabels.clear();
+  if (PendingLabels.empty())
+    return;
+  if (!F) {
+    F = new MCDataFragment();
+    MCSection *CurSection = getCurrentSectionOnly();
+    CurSection->getFragmentList().insert(CurInsertionPoint, F);
+    F->setParent(CurSection);
   }
+  for (MCSymbol *Sym : PendingLabels) {
+    Sym->setFragment(F);
+    Sym->setOffset(FOffset);
+  }
+  PendingLabels.clear();
 }
 
 void MCObjectStreamer::emitAbsoluteSymbolDiff(const MCSymbol *Hi,
                                               const MCSymbol *Lo,
                                               unsigned Size) {
   // If not assigned to the same (valid) fragment, fallback.
-  if (!Hi->getFragment() || Hi->getFragment() != Lo->getFragment()) {
+  if (!Hi->getFragment() || Hi->getFragment() != Lo->getFragment() ||
+      Hi->isVariable() || Lo->isVariable()) {
     MCStreamer::emitAbsoluteSymbolDiff(Hi, Lo, Size);
     return;
   }
 
-  assert(Hi->getOffset() >= Lo->getOffset() &&
-         "Expected Hi to be greater than Lo");
   EmitIntValue(Hi->getOffset() - Lo->getOffset(), Size);
 }
 
@@ -93,7 +93,7 @@ MCFragment *MCObjectStreamer::getCurrentFragment() const {
   assert(getCurrentSectionOnly() && "No current section!");
 
   if (CurInsertionPoint != getCurrentSectionOnly()->getFragmentList().begin())
-    return std::prev(CurInsertionPoint);
+    return &*std::prev(CurInsertionPoint);
 
   return nullptr;
 }
@@ -126,7 +126,8 @@ void MCObjectStreamer::EmitValueImpl(const MCExpr *Value, unsigned Size,
   MCDataFragment *DF = getOrCreateDataFragment();
   flushPendingLabels(DF, DF->getContents().size());
 
-  MCLineEntry::Make(this, getCurrentSection().first);
+  MCCVLineEntry::Make(this);
+  MCDwarfLineEntry::Make(this, getCurrentSection().first);
 
   // Avoid fixups when possible.
   int64_t AbsValue;
@@ -155,7 +156,6 @@ void MCObjectStreamer::EmitLabel(MCSymbol *Symbol) {
   MCStreamer::EmitLabel(Symbol);
 
   getAssembler().registerSymbol(*Symbol);
-  assert(!Symbol->getFragment() && "Unexpected fragment on symbol data!");
 
   // If there is a current fragment, mark the symbol as pointing into it.
   // Otherwise queue the label and set its fragment pointer when we emit the
@@ -234,7 +234,8 @@ void MCObjectStreamer::EmitInstruction(const MCInst &Inst,
 
   // Now that a machine instruction has been assembled into this section, make
   // a line entry for any .loc directive that has been seen.
-  MCLineEntry::Make(this, getCurrentSection().first);
+  MCCVLineEntry::Make(this);
+  MCDwarfLineEntry::Make(this, getCurrentSection().first);
 
   // If this instruction doesn't need relaxation, just emit it as data.
   MCAssembler &Assembler = getAssembler();
@@ -251,9 +252,9 @@ void MCObjectStreamer::EmitInstruction(const MCInst &Inst,
   if (Assembler.getRelaxAll() ||
       (Assembler.isBundlingEnabled() && Sec->isBundleLocked())) {
     MCInst Relaxed;
-    getAssembler().getBackend().relaxInstruction(Inst, Relaxed);
+    getAssembler().getBackend().relaxInstruction(Inst, STI, Relaxed);
     while (getAssembler().getBackend().mayNeedRelaxation(Relaxed))
-      getAssembler().getBackend().relaxInstruction(Relaxed, Relaxed);
+      getAssembler().getBackend().relaxInstruction(Relaxed, STI, Relaxed);
     EmitInstToData(Relaxed, STI);
     return;
   }
@@ -303,7 +304,7 @@ void MCObjectStreamer::EmitDwarfLocDirective(unsigned FileNo, unsigned Line,
                                              StringRef FileName) {
   // In case we see two .loc directives in a row, make sure the
   // first one gets a line entry.
-  MCLineEntry::Make(this, getCurrentSection().first);
+  MCDwarfLineEntry::Make(this, getCurrentSection().first);
 
   this->MCStreamer::EmitDwarfLocDirective(FileNo, Line, Column, Flags,
                                           Isa, Discriminator, FileName);
@@ -364,8 +365,56 @@ void MCObjectStreamer::EmitDwarfAdvanceFrameAddr(const MCSymbol *LastLabel,
   insert(new MCDwarfCallFrameFragment(*AddrDelta));
 }
 
+void MCObjectStreamer::EmitCVLocDirective(unsigned FunctionId, unsigned FileNo,
+                                          unsigned Line, unsigned Column,
+                                          bool PrologueEnd, bool IsStmt,
+                                          StringRef FileName) {
+  // In case we see two .cv_loc directives in a row, make sure the
+  // first one gets a line entry.
+  MCCVLineEntry::Make(this);
+
+  this->MCStreamer::EmitCVLocDirective(FunctionId, FileNo, Line, Column,
+                                       PrologueEnd, IsStmt, FileName);
+}
+
+void MCObjectStreamer::EmitCVLinetableDirective(unsigned FunctionId,
+                                                const MCSymbol *Begin,
+                                                const MCSymbol *End) {
+  getContext().getCVContext().emitLineTableForFunction(*this, FunctionId, Begin,
+                                                       End);
+  this->MCStreamer::EmitCVLinetableDirective(FunctionId, Begin, End);
+}
+
+void MCObjectStreamer::EmitCVInlineLinetableDirective(
+    unsigned PrimaryFunctionId, unsigned SourceFileId, unsigned SourceLineNum,
+    const MCSymbol *FnStartSym, const MCSymbol *FnEndSym,
+    ArrayRef<unsigned> SecondaryFunctionIds) {
+  getContext().getCVContext().emitInlineLineTableForFunction(
+      *this, PrimaryFunctionId, SourceFileId, SourceLineNum, FnStartSym,
+      FnEndSym, SecondaryFunctionIds);
+  this->MCStreamer::EmitCVInlineLinetableDirective(
+      PrimaryFunctionId, SourceFileId, SourceLineNum, FnStartSym, FnEndSym,
+      SecondaryFunctionIds);
+}
+
+void MCObjectStreamer::EmitCVDefRangeDirective(
+    ArrayRef<std::pair<const MCSymbol *, const MCSymbol *>> Ranges,
+    StringRef FixedSizePortion) {
+  getContext().getCVContext().emitDefRange(*this, Ranges, FixedSizePortion);
+  this->MCStreamer::EmitCVDefRangeDirective(Ranges, FixedSizePortion);
+}
+
+void MCObjectStreamer::EmitCVStringTableDirective() {
+  getContext().getCVContext().emitStringTable(*this);
+}
+void MCObjectStreamer::EmitCVFileChecksumsDirective() {
+  getContext().getCVContext().emitFileChecksums(*this);
+}
+
+
 void MCObjectStreamer::EmitBytes(StringRef Data) {
-  MCLineEntry::Make(this, getCurrentSection().first);
+  MCCVLineEntry::Make(this);
+  MCDwarfLineEntry::Make(this, getCurrentSection().first);
   MCDataFragment *DF = getOrCreateDataFragment();
   flushPendingLabels(DF, DF->getContents().size());
   DF->getContents().append(Data.begin(), Data.end());
@@ -391,26 +440,9 @@ void MCObjectStreamer::EmitCodeAlignment(unsigned ByteAlignment,
   cast<MCAlignFragment>(getCurrentFragment())->setEmitNops(true);
 }
 
-bool MCObjectStreamer::EmitValueToOffset(const MCExpr *Offset,
+void MCObjectStreamer::emitValueToOffset(const MCExpr *Offset,
                                          unsigned char Value) {
-  int64_t Res;
-  if (Offset->evaluateAsAbsolute(Res, getAssembler())) {
-    insert(new MCOrgFragment(*Offset, Value));
-    return false;
-  }
-
-  MCSymbol *CurrentPos = getContext().createTempSymbol();
-  EmitLabel(CurrentPos);
-  MCSymbolRefExpr::VariantKind Variant = MCSymbolRefExpr::VK_None;
-  const MCExpr *Ref =
-    MCSymbolRefExpr::create(CurrentPos, Variant, getContext());
-  const MCExpr *Delta =
-    MCBinaryExpr::create(MCBinaryExpr::Sub, Offset, Ref, getContext());
-
-  if (!Delta->evaluateAsAbsolute(Res, getAssembler()))
-    return true;
-  EmitFill(Res, Value);
-  return false;
+  insert(new MCOrgFragment(*Offset, Value));
 }
 
 // Associate GPRel32 fixup with data and resize data area
@@ -433,19 +465,73 @@ void MCObjectStreamer::EmitGPRel64Value(const MCExpr *Value) {
   DF->getContents().resize(DF->getContents().size() + 8, 0);
 }
 
-void MCObjectStreamer::EmitFill(uint64_t NumBytes, uint8_t FillValue) {
-  // FIXME: A MCFillFragment would be more memory efficient but MCExpr has
-  //        problems evaluating expressions across multiple fragments.
+bool MCObjectStreamer::EmitRelocDirective(const MCExpr &Offset, StringRef Name,
+                                          const MCExpr *Expr, SMLoc Loc) {
+  int64_t OffsetValue;
+  if (!Offset.evaluateAsAbsolute(OffsetValue))
+    llvm_unreachable("Offset is not absolute");
+
+  if (OffsetValue < 0)
+    llvm_unreachable("Offset is negative");
+
   MCDataFragment *DF = getOrCreateDataFragment();
   flushPendingLabels(DF, DF->getContents().size());
-  DF->getContents().append(NumBytes, FillValue);
+
+  Optional<MCFixupKind> MaybeKind = Assembler->getBackend().getFixupKind(Name);
+  if (!MaybeKind.hasValue())
+    return true;
+
+  MCFixupKind Kind = *MaybeKind;
+
+  if (Expr == nullptr)
+    Expr =
+        MCSymbolRefExpr::create(getContext().createTempSymbol(), getContext());
+  DF->getFixups().push_back(MCFixup::create(OffsetValue, Expr, Kind, Loc));
+  return false;
 }
 
-void MCObjectStreamer::EmitZeros(uint64_t NumBytes) {
+void MCObjectStreamer::emitFill(uint64_t NumBytes, uint8_t FillValue) {
   const MCSection *Sec = getCurrentSection().first;
+  (void)Sec;
   assert(Sec && "need a section");
-  unsigned ItemSize = Sec->isVirtualSection() ? 0 : 1;
-  insert(new MCFillFragment(0, ItemSize, NumBytes));
+  insert(new MCFillFragment(FillValue, NumBytes));
+}
+
+void MCObjectStreamer::emitFill(const MCExpr &NumBytes, uint64_t FillValue,
+                                SMLoc Loc) {
+  MCDataFragment *DF = getOrCreateDataFragment();
+  flushPendingLabels(DF, DF->getContents().size());
+
+  int64_t IntNumBytes;
+  if (!NumBytes.evaluateAsAbsolute(IntNumBytes, getAssembler())) {
+    getContext().reportError(Loc, "expected absolute expression");
+    return;
+  }
+
+  if (IntNumBytes <= 0) {
+    getContext().reportError(Loc, "invalid number of bytes");
+    return;
+  }
+
+  emitFill(IntNumBytes, FillValue);
+}
+
+void MCObjectStreamer::emitFill(const MCExpr &NumValues, int64_t Size,
+                                int64_t Expr, SMLoc Loc) {
+  int64_t IntNumValues;
+  if (!NumValues.evaluateAsAbsolute(IntNumValues, getAssembler())) {
+    getContext().reportError(Loc, "expected absolute expression");
+    return;
+  }
+
+  if (IntNumValues < 0) {
+    getContext().getSourceManager()->PrintMessage(
+        Loc, SourceMgr::DK_Warning,
+        "'.fill' directive with negative repeat count has no effect");
+    return;
+  }
+
+  MCStreamer::emitFill(IntNumValues, Size, Expr);
 }
 
 void MCObjectStreamer::FinishImpl() {

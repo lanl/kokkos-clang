@@ -38,6 +38,7 @@
 #include "clang/Lex/MacroArgs.h"
 #include "clang/Lex/MacroInfo.h"
 #include "clang/Lex/ModuleLoader.h"
+#include "clang/Lex/PTHManager.h"
 #include "clang/Lex/Pragma.h"
 #include "clang/Lex/PreprocessingRecord.h"
 #include "clang/Lex/PreprocessorOptions.h"
@@ -50,7 +51,10 @@
 #include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
+#include <utility>
 using namespace clang;
+
+template class llvm::Registry<clang::PragmaHandler>;
 
 //===----------------------------------------------------------------------===//
 ExternalPreprocessorSource::~ExternalPreprocessorSource() { }
@@ -61,7 +65,7 @@ Preprocessor::Preprocessor(IntrusiveRefCntPtr<PreprocessorOptions> PPOpts,
                            ModuleLoader &TheModuleLoader,
                            IdentifierInfoLookup *IILookup, bool OwnsHeaders,
                            TranslationUnitKind TUKind)
-    : PPOpts(PPOpts), Diags(&diags), LangOpts(opts), Target(nullptr),
+    : PPOpts(std::move(PPOpts)), Diags(&diags), LangOpts(opts), Target(nullptr),
       AuxTarget(nullptr), FileMgr(Headers.getFileMgr()), SourceMgr(SM),
       ScratchBuf(new ScratchBuffer(SourceMgr)), HeaderInfo(Headers),
       TheModuleLoader(TheModuleLoader), ExternalSource(nullptr),
@@ -476,7 +480,7 @@ void Preprocessor::CreateString(StringRef Str, Token &Tok,
 }
 
 Module *Preprocessor::getCurrentModule() {
-  if (getLangOpts().CurrentModule.empty())
+  if (!getLangOpts().CompilingModule)
     return nullptr;
 
   return getHeaderSearchInfo().lookupModule(getLangOpts().CurrentModule);
@@ -519,7 +523,7 @@ void Preprocessor::EnterMainSourceFile() {
     llvm::MemoryBuffer::getMemBufferCopy(Predefines, "<built-in>");
   assert(SB && "Cannot create predefined source buffer");
   FileID FID = SourceMgr.createFileID(std::move(SB));
-  assert(!FID.isInvalid() && "Could not create FileID for predefines?");
+  assert(FID.isValid() && "Could not create FileID for predefines?");
   setPredefinesFileID(FID);
 
   // Start parsing the predefines.
@@ -716,7 +720,7 @@ bool Preprocessor::HandleIdentifier(Token &Identifier) {
 }
 
 void Preprocessor::Lex(Token &Result) {
-  // We loop here until a lex function retuns a token; this avoids recursion.
+  // We loop here until a lex function returns a token; this avoids recursion.
   bool ReturnedToken;
   do {
     switch (CurLexerKind) {

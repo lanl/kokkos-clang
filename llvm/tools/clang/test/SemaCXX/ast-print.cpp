@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -ast-print %s -std=gnu++11 | FileCheck %s
+// RUN: %clang_cc1 -triple %ms_abi_triple -ast-print %s -std=gnu++11 | FileCheck %s
 
 // CHECK: r;
 // CHECK-NEXT: (r->method());
@@ -66,7 +66,7 @@ template <class S> void test7()
 template <typename T> void test8(T t) { t.~T(); }
 
 
-// CHECK:      enum E {
+// CHECK:      enum E
 // CHECK-NEXT:  A,
 // CHECK-NEXT:  B,
 // CHECK-NEXT:  C
@@ -226,4 +226,15 @@ namespace PR24872 {
 template <typename T> struct Foo : T {
   using T::operator-;
 };
+}
+
+namespace dont_crash_on_auto_vars {
+struct T { enum E {X = 12ll }; };
+struct S {
+  struct  { int I; } ADecl;
+  static const auto Y = T::X;
+};
+//CHECK: static const auto Y = T::X;
+constexpr auto var = T::X;
+//CHECK: constexpr auto var = T::X;
 }

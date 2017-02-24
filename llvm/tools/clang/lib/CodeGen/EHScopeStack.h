@@ -89,7 +89,10 @@ enum CleanupKind : unsigned {
   InactiveCleanup = 0x4,
   InactiveEHCleanup = EHCleanup | InactiveCleanup,
   InactiveNormalCleanup = NormalCleanup | InactiveCleanup,
-  InactiveNormalAndEHCleanup = NormalAndEHCleanup | InactiveCleanup
+  InactiveNormalAndEHCleanup = NormalAndEHCleanup | InactiveCleanup,
+
+  LifetimeMarker = 0x8,
+  NormalEHLifetimeMarker = LifetimeMarker | NormalAndEHCleanup,
 };
 
 /// A stack of scopes which respond to exceptions, including cleanups
@@ -334,10 +337,6 @@ public:
   /// Pops a terminate handler off the stack.
   void popTerminate();
 
-  void pushPadEnd(llvm::BasicBlock *PadEndBB);
-
-  void popPadEnd();
-
   // Returns true iff the current scope is either empty or contains only
   // lifetime markers, i.e. no real cleanup code
   bool containsOnlyLifetimeMarkers(stable_iterator Old) const;
@@ -345,9 +344,7 @@ public:
   /// Determines whether the exception-scopes stack is empty.
   bool empty() const { return StartOfData == EndOfBuffer; }
 
-  bool requiresLandingPad() const {
-    return InnermostEHScope != stable_end();
-  }
+  bool requiresLandingPad() const;
 
   /// Determines whether there are any normal cleanups on the stack.
   bool hasNormalCleanups() const {
@@ -365,7 +362,6 @@ public:
     return InnermostEHScope;
   }
 
-  stable_iterator getInnermostActiveEHScope() const;
 
   /// An unstable reference to a scope-stack depth.  Invalidated by
   /// pushes but not pops.
@@ -395,9 +391,6 @@ public:
   /// Turn a stable reference to a scope depth into a unstable pointer
   /// to the EH stack.
   iterator find(stable_iterator save) const;
-
-  /// Removes the cleanup pointed to by the given stable_iterator.
-  void removeCleanup(stable_iterator save);
 
   /// Add a branch fixup to the current cleanup scope.
   BranchFixup &addBranchFixup() {

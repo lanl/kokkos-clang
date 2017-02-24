@@ -50,7 +50,7 @@ public:
   }
 
   VariantMatcher actOnMatcherExpression(MatcherCtor Ctor,
-                                        const SourceRange &NameRange,
+                                        SourceRange NameRange,
                                         StringRef BindID,
                                         ArrayRef<ParserValue> Args,
                                         Diagnostics *Error) override {
@@ -102,7 +102,7 @@ TEST(ParserTest, ParseString) {
   EXPECT_EQ("1:1: Error parsing string token: <\"Baz>", Sema.Errors[2]);
 }
 
-bool matchesRange(const SourceRange &Range, unsigned StartLine,
+bool matchesRange(SourceRange Range, unsigned StartLine,
                   unsigned EndLine, unsigned StartColumn, unsigned EndColumn) {
   EXPECT_EQ(StartLine, Range.Start.Line);
   EXPECT_EQ(EndLine, Range.End.Line);
@@ -263,7 +263,7 @@ TEST(ParserTest, Errors) {
             "1:1: Matcher does not support binding.",
             ParseWithError("isArrow().bind(\"foo\")"));
   EXPECT_EQ("Input value has unresolved overloaded type: "
-            "Matcher<DoStmt|ForStmt|WhileStmt|CXXForRangeStmt>",
+            "Matcher<DoStmt|ForStmt|WhileStmt|CXXForRangeStmt|FunctionDecl>",
             ParseMatcherWithError("hasBody(stmt())"));
 }
 
@@ -318,8 +318,10 @@ TEST(ParserTest, CompletionNamedValues) {
       Comps[1].MatcherDecl);
 
   EXPECT_EQ("arent(", Comps[2].TypedText);
-  EXPECT_EQ("Matcher<Decl> hasParent(Matcher<Decl|Stmt>)",
-            Comps[2].MatcherDecl);
+  EXPECT_EQ(
+      "Matcher<Decl> "
+      "hasParent(Matcher<NestedNameSpecifierLoc|TypeLoc|Decl|...>)",
+      Comps[2].MatcherDecl);
 }
 
 }  // end anonymous namespace

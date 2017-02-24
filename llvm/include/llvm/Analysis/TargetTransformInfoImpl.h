@@ -22,6 +22,7 @@
 #include "llvm/IR/GetElementPtrTypeIterator.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/Type.h"
+#include "llvm/Analysis/VectorUtils.h"
 
 namespace llvm {
 
@@ -101,8 +102,8 @@ public:
     }
   }
 
-  unsigned getGEPCost(Type *PointeeType, const Value *Ptr,
-                      ArrayRef<const Value *> Operands) {
+  int getGEPCost(Type *PointeeType, const Value *Ptr,
+                 ArrayRef<const Value *> Operands) {
     // In the basic model, we just assume that all-constant GEPs will be folded
     // into their uses via addressing modes.
     for (unsigned Idx = 0, Size = Operands.size(); Idx != Size; ++Idx)
@@ -127,6 +128,8 @@ public:
     return TTI::TCC_Basic * (NumArgs + 1);
   }
 
+  unsigned getInliningThresholdMultiplier() { return 1; }
+
   unsigned getIntrinsicCost(Intrinsic::ID IID, Type *RetTy,
                             ArrayRef<Type *> ParamTys) {
     switch (IID) {
@@ -147,9 +150,6 @@ public:
     case Intrinsic::objectsize:
     case Intrinsic::ptr_annotation:
     case Intrinsic::var_annotation:
-    case Intrinsic::experimental_gc_result_int:
-    case Intrinsic::experimental_gc_result_float:
-    case Intrinsic::experimental_gc_result_ptr:
     case Intrinsic::experimental_gc_result:
     case Intrinsic::experimental_gc_relocate:
       // These intrinsics don't actually represent code after lowering.
@@ -209,9 +209,13 @@ public:
     return !BaseGV && BaseOffset == 0 && (Scale == 0 || Scale == 1);
   }
 
-  bool isLegalMaskedStore(Type *DataType, int Consecutive) { return false; }
+  bool isLegalMaskedStore(Type *DataType) { return false; }
 
-  bool isLegalMaskedLoad(Type *DataType, int Consecutive) { return false; }
+  bool isLegalMaskedLoad(Type *DataType) { return false; }
+
+  bool isLegalMaskedScatter(Type *DataType) { return false; }
+
+  bool isLegalMaskedGather(Type *DataType) { return false; }
 
   int getScalingFactorCost(Type *Ty, GlobalValue *BaseGV, int64_t BaseOffset,
                            bool HasBaseReg, int64_t Scale, unsigned AddrSpace) {
@@ -223,8 +227,6 @@ public:
   }
 
   bool isTruncateFree(Type *Ty1, Type *Ty2) { return false; }
-
-  bool isZExtFree(Type *Ty1, Type *Ty2) { return false; }
 
   bool isProfitableToHoist(Instruction *I) { return true; }
 
@@ -240,6 +242,13 @@ public:
 
   bool enableInterleavedAccessVectorization() { return false; }
 
+  bool isFPVectorizationPotentiallyUnsafe() { return false; }
+
+  bool allowsMisalignedMemoryAccesses(unsigned BitWidth,
+                                      unsigned AddressSpace,
+                                      unsigned Alignment,
+                                      bool *Fast) { return false; }
+
   TTI::PopcntSupportKind getPopcntSupport(unsigned IntTyWidthInBit) {
     return TTI::PSK_Software;
   }
@@ -247,6 +256,11 @@ public:
   bool haveFastSqrt(Type *Ty) { return false; }
 
   unsigned getFPOpCost(Type *Ty) { return TargetTransformInfo::TCC_Basic; }
+
+  int getIntImmCodeSizeCost(unsigned Opcode, unsigned Idx, const APInt &Imm,
+                            Type *Ty) {
+    return 0;
+  }
 
   unsigned getIntImmCost(const APInt &Imm, Type *Ty) { return TTI::TCC_Basic; }
 
@@ -264,6 +278,16 @@ public:
 
   unsigned getRegisterBitWidth(bool Vector) { return 32; }
 
+  unsigned getLoadStoreVecRegBitWidth(unsigned AddrSpace) { return 128; }
+
+  unsigned getCacheLineSize() { return 0; }
+
+  unsigned getPrefetchDistance() { return 0; }
+
+  unsigned getMinPrefetchStride() { return 1; }
+
+  unsigned getMaxPrefetchIterationsAhead() { return UINT_MAX; }
+
   unsigned getMaxInterleaveFactor(unsigned VF) { return 1; }
 
   unsigned getArithmeticInstrCost(unsigned Opcode, Type *Ty,
@@ -280,6 +304,11 @@ public:
   }
 
   unsigned getCastInstrCost(unsigned Opcode, Type *Dst, Type *Src) { return 1; }
+
+  unsigned getExtractWithExtendCost(unsigned Opcode, Type *Dst,
+                                    VectorType *VecTy, unsigned Index) {
+    return 1;
+  }
 
   unsigned getCFInstrCost(unsigned Opcode) { return 1; }
 
@@ -301,6 +330,12 @@ public:
     return 1;
   }
 
+  unsigned getGatherScatterOpCost(unsigned Opcode, Type *DataTy, Value *Ptr,
+                                  bool VariableMask,
+                                  unsigned Alignment) {
+    return 1;
+  }
+
   unsigned getInterleavedMemoryOpCost(unsigned Opcode, Type *VecTy,
                                       unsigned Factor,
                                       ArrayRef<unsigned> Indices,
@@ -310,7 +345,11 @@ public:
   }
 
   unsigned getIntrinsicInstrCost(Intrinsic::ID ID, Type *RetTy,
-                                 ArrayRef<Type *> Tys) {
+                                 ArrayRef<Type *> Tys, FastMathFlags FMF) {
+    return 1;
+  }
+  unsigned getIntrinsicInstrCost(Intrinsic::ID ID, Type *RetTy,
+                                 ArrayRef<Value *> Args, FastMathFlags FMF) {
     return 1;
   }
 
@@ -394,8 +433,8 @@ public:
 
   using BaseT::getGEPCost;
 
-  unsigned getGEPCost(Type *PointeeType, const Value *Ptr,
-                      ArrayRef<const Value *> Operands) {
+  int getGEPCost(Type *PointeeType, const Value *Ptr,
+                 ArrayRef<const Value *> Operands) {
     const GlobalValue *BaseGV = nullptr;
     if (Ptr != nullptr) {
       // TODO: will remove this when pointers have an opaque type.
@@ -411,23 +450,30 @@ public:
     // Assumes the address space is 0 when Ptr is nullptr.
     unsigned AS =
         (Ptr == nullptr ? 0 : Ptr->getType()->getPointerAddressSpace());
-    auto GTI = gep_type_begin(PointerType::get(PointeeType, AS), Operands);
+    auto GTI = gep_type_begin(PointeeType, AS, Operands);
     for (auto I = Operands.begin(); I != Operands.end(); ++I, ++GTI) {
+      // We assume that the cost of Scalar GEP with constant index and the
+      // cost of Vector GEP with splat constant index are the same.
+      const ConstantInt *ConstIdx = dyn_cast<ConstantInt>(*I);
+      if (!ConstIdx)
+        if (auto Splat = getSplatValue(*I))
+          ConstIdx = dyn_cast<ConstantInt>(Splat);
       if (isa<SequentialType>(*GTI)) {
         int64_t ElementSize = DL.getTypeAllocSize(GTI.getIndexedType());
-        if (const ConstantInt *ConstIdx = dyn_cast<ConstantInt>(*I)) {
+        if (ConstIdx)
           BaseOffset += ConstIdx->getSExtValue() * ElementSize;
-        } else {
+        else {
           // Needs scale register.
-          if (Scale != 0) {
+          if (Scale != 0)
             // No addressing mode takes two scale registers.
             return TTI::TCC_Basic;
-          }
           Scale = ElementSize;
         }
       } else {
         StructType *STy = cast<StructType>(*GTI);
-        uint64_t Field = cast<ConstantInt>(*I)->getZExtValue();
+        // For structures the index is always splat or scalar constant
+        assert(ConstIdx && "Unexpected GEP index");
+        uint64_t Field = ConstIdx->getZExtValue();
         BaseOffset += DL.getStructLayout(STy)->getElementOffset(Field);
       }
     }

@@ -34,7 +34,6 @@
 #include "clang/Analysis/CFGStmtMap.h"
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Basic/SourceManager.h"
-#include "clang/Lex/Lexer.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Sema/ScopeInfo.h"
 #include "clang/Sema/SemaInternal.h"
@@ -99,7 +98,7 @@ namespace {
       }
     }
   };
-}
+} // anonymous namespace
 
 /// CheckUnreachable - Check for unreachable code.
 static void CheckUnreachable(Sema &S, AnalysisDeclContext &AC) {
@@ -157,7 +156,7 @@ public:
         << DiagRange << isAlwaysTrue;
   }
 };
-} // namespace
+} // anonymous namespace
 
 //===----------------------------------------------------------------------===//
 // Check for infinite self-recursion in functions
@@ -506,7 +505,7 @@ struct CheckFallThroughDiagnostics {
   }
 };
 
-}
+} // anonymous namespace
 
 /// CheckFallThroughForFunctionDef - Check that we don't fall off the end of a
 /// function that should return a value.  Check that we don't fall off the end
@@ -614,7 +613,7 @@ public:
 
   bool doesContainReference() const { return FoundReference; }
 };
-}
+} // anonymous namespace
 
 static bool SuggestInitializationFixit(Sema &S, const VarDecl *VD) {
   QualType VariableTy = VD->getType().getCanonicalType();
@@ -657,8 +656,7 @@ static void CreateIfFixit(Sema &S, const Stmt *If, const Stmt *Then,
         CharSourceRange::getCharRange(If->getLocStart(),
                                       Then->getLocStart()));
     if (Else) {
-      SourceLocation ElseKwLoc = Lexer::getLocForEndOfToken(
-          Then->getLocEnd(), 0, S.getSourceManager(), S.getLangOpts());
+      SourceLocation ElseKwLoc = S.getLocForEndOfToken(Then->getLocEnd());
       Fixit2 = FixItHint::CreateRemoval(
           SourceRange(ElseKwLoc, Else->getLocEnd()));
     }
@@ -850,7 +848,6 @@ static void DiagUninitUse(Sema &S, const VarDecl *VD, const UninitUse &Use,
 static bool DiagnoseUninitializedUse(Sema &S, const VarDecl *VD,
                                      const UninitUse &Use,
                                      bool alwaysReportSelfInit = false) {
-
   if (const DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(Use.getUser())) {
     // Inspect the initializer of the variable declaration which is
     // being referenced prior to its initialization. We emit
@@ -892,7 +889,7 @@ static bool DiagnoseUninitializedUse(Sema &S, const VarDecl *VD,
   // the initializer of that declaration & we didn't already suggest
   // an initialization fixit.
   if (!SuggestInitializationFixit(S, VD))
-    S.Diag(VD->getLocStart(), diag::note_uninit_var_def)
+    S.Diag(VD->getLocStart(), diag::note_var_declared_here)
       << VD->getDeclName();
 
   return true;
@@ -1072,6 +1069,34 @@ namespace {
     Sema &S;
     llvm::SmallPtrSet<const CFGBlock *, 16> ReachableBlocks;
   };
+} // anonymous namespace
+
+static StringRef getFallthroughAttrSpelling(Preprocessor &PP,
+                                            SourceLocation Loc) {
+  TokenValue FallthroughTokens[] = {
+    tok::l_square, tok::l_square,
+    PP.getIdentifierInfo("fallthrough"),
+    tok::r_square, tok::r_square
+  };
+
+  TokenValue ClangFallthroughTokens[] = {
+    tok::l_square, tok::l_square, PP.getIdentifierInfo("clang"),
+    tok::coloncolon, PP.getIdentifierInfo("fallthrough"),
+    tok::r_square, tok::r_square
+  };
+
+  bool PreferClangAttr = !PP.getLangOpts().CPlusPlus1z;
+
+  StringRef MacroName;
+  if (PreferClangAttr)
+    MacroName = PP.getLastMacroWithSpelling(Loc, ClangFallthroughTokens);
+  if (MacroName.empty())
+    MacroName = PP.getLastMacroWithSpelling(Loc, FallthroughTokens);
+  if (MacroName.empty() && !PreferClangAttr)
+    MacroName = PP.getLastMacroWithSpelling(Loc, ClangFallthroughTokens);
+  if (MacroName.empty())
+    MacroName = PreferClangAttr ? "[[clang::fallthrough]]" : "[[fallthrough]]";
+  return MacroName;
 }
 
 static void DiagnoseSwitchLabelsFallthrough(Sema &S, AnalysisDeclContext &AC,
@@ -1132,15 +1157,7 @@ static void DiagnoseSwitchLabelsFallthrough(Sema &S, AnalysisDeclContext &AC,
         }
         if (!(B->empty() && Term && isa<BreakStmt>(Term))) {
           Preprocessor &PP = S.getPreprocessor();
-          TokenValue Tokens[] = {
-            tok::l_square, tok::l_square, PP.getIdentifierInfo("clang"),
-            tok::coloncolon, PP.getIdentifierInfo("fallthrough"),
-            tok::r_square, tok::r_square
-          };
-          StringRef AnnotationSpelling = "[[clang::fallthrough]]";
-          StringRef MacroName = PP.getLastMacroWithSpelling(L, Tokens);
-          if (!MacroName.empty())
-            AnnotationSpelling = MacroName;
+          StringRef AnnotationSpelling = getFallthroughAttrSpelling(PP, L);
           SmallString<64> TextToInsert(AnnotationSpelling);
           TextToInsert += "; ";
           S.Diag(L, diag::note_insert_fallthrough_fixit) <<
@@ -1154,7 +1171,7 @@ static void DiagnoseSwitchLabelsFallthrough(Sema &S, AnalysisDeclContext &AC,
   }
 
   for (const auto *F : FM.getFallthroughStmts())
-    S.Diag(F->getLocStart(), diag::warn_fallthrough_attr_invalid_placement);
+    S.Diag(F->getLocStart(), diag::err_fallthrough_attr_invalid_placement);
 }
 
 static bool isInLoop(const ASTContext &Ctx, const ParentMap &PM,
@@ -1182,7 +1199,6 @@ static bool isInLoop(const ASTContext &Ctx, const ParentMap &PM,
 
   return false;
 }
-
 
 static void diagnoseRepeatedUseOfWeak(Sema &S,
                                       const sema::FunctionScopeInfo *CurFn,
@@ -1306,21 +1322,27 @@ static void diagnoseRepeatedUseOfWeak(Sema &S,
       Ivar
     } ObjectKind;
 
-    const NamedDecl *D = Key.getProperty();
-    if (isa<VarDecl>(D))
+    const NamedDecl *KeyProp = Key.getProperty();
+    if (isa<VarDecl>(KeyProp))
       ObjectKind = Variable;
-    else if (isa<ObjCPropertyDecl>(D))
+    else if (isa<ObjCPropertyDecl>(KeyProp))
       ObjectKind = Property;
-    else if (isa<ObjCMethodDecl>(D))
+    else if (isa<ObjCMethodDecl>(KeyProp))
       ObjectKind = ImplicitProperty;
-    else if (isa<ObjCIvarDecl>(D))
+    else if (isa<ObjCIvarDecl>(KeyProp))
       ObjectKind = Ivar;
     else
       llvm_unreachable("Unexpected weak object kind!");
 
+    // Do not warn about IBOutlet weak property receivers being set to null
+    // since they are typically only used from the main thread.
+    if (const ObjCPropertyDecl *Prop = dyn_cast<ObjCPropertyDecl>(KeyProp))
+      if (Prop->hasAttr<IBOutletAttr>())
+        continue;
+
     // Show the first time the object was read.
     S.Diag(FirstRead->getLocStart(), DiagKind)
-      << int(ObjectKind) << D << int(FunctionKind)
+      << int(ObjectKind) << KeyProp << int(FunctionKind)
       << FirstRead->getSourceRange();
 
     // Print all the other accesses as notes.
@@ -1343,20 +1365,16 @@ class UninitValsDiagReporter : public UninitVariablesHandler {
   // the same as insertion order. This is needed to obtain a deterministic
   // order of diagnostics when calling flushDiagnostics().
   typedef llvm::MapVector<const VarDecl *, MappedType> UsesMap;
-  UsesMap *uses;
+  UsesMap uses;
   
 public:
-  UninitValsDiagReporter(Sema &S) : S(S), uses(nullptr) {}
+  UninitValsDiagReporter(Sema &S) : S(S) {}
   ~UninitValsDiagReporter() override { flushDiagnostics(); }
 
   MappedType &getUses(const VarDecl *vd) {
-    if (!uses)
-      uses = new UsesMap();
-
-    MappedType &V = (*uses)[vd];
+    MappedType &V = uses[vd];
     if (!V.getPointer())
       V.setPointer(new UsesVec());
-    
     return V;
   }
 
@@ -1370,10 +1388,7 @@ public:
   }
   
   void flushDiagnostics() {
-    if (!uses)
-      return;
-
-    for (const auto &P : *uses) {
+    for (const auto &P : uses) {
       const VarDecl *vd = P.first;
       const MappedType &V = P.second;
 
@@ -1414,7 +1429,8 @@ public:
       // Release the uses vector.
       delete vec;
     }
-    delete uses;
+
+    uses.clear();
   }
 
 private:
@@ -1426,7 +1442,7 @@ private:
     });
   }
 };
-}
+} // anonymous namespace
 
 namespace clang {
 namespace {
@@ -1444,7 +1460,8 @@ struct SortDiagBySourceLocation {
     return SM.isBeforeInTranslationUnit(left.first.first, right.first.first);
   }
 };
-}}
+} // anonymous namespace
+} // namespace clang
 
 //===----------------------------------------------------------------------===//
 // -Wthread-safety
@@ -1683,7 +1700,6 @@ class ThreadSafetyReporter : public clang::threadSafety::ThreadSafetyHandler {
     Warnings.emplace_back(std::move(Warning), getNotes());
   }
 
-
   void handleFunExcludesLock(StringRef Kind, Name FunName, Name LockName,
                              SourceLocation Loc) override {
     PartialDiagnosticAt Warning(Loc, S.PDiag(diag::warn_fun_excludes_mutex)
@@ -1709,10 +1725,10 @@ class ThreadSafetyReporter : public clang::threadSafety::ThreadSafetyHandler {
   }
 
   void leaveFunction(const FunctionDecl* FD) override {
-    CurrentFunction = 0;
+    CurrentFunction = nullptr;
   }
 };
-} // namespace
+} // anonymous namespace
 } // namespace threadSafety
 } // namespace clang
 
@@ -1805,7 +1821,9 @@ public:
     Warnings.emplace_back(std::move(Warning), OptionalNotes());
   }
 };
-}}}
+} // anonymous namespace
+} // namespace consumed
+} // namespace clang
 
 //===----------------------------------------------------------------------===//
 // AnalysisBasedWarnings - Worker object used by Sema to execute analysis-based
@@ -1879,7 +1897,7 @@ AnalysisBasedWarnings::IssueWarnings(sema::AnalysisBasedWarnings::Policy P,
   if (cast<DeclContext>(D)->isDependentContext())
     return;
 
-  if (Diags.hasUncompilableErrorOccurred() || Diags.hasFatalErrorOccurred()) {
+  if (Diags.hasUncompilableErrorOccurred()) {
     // Flush out any possibly unreachable diagnostics.
     flushDiagnostics(S, fscope);
     return;
@@ -1971,7 +1989,6 @@ AnalysisBasedWarnings::IssueWarnings(sema::AnalysisBasedWarnings::Policy P,
       flushDiagnostics(S, fscope);
   }
   
-  
   // Warning: check missing 'return'
   if (P.enableCheckFallThrough) {
     const CheckFallThroughDiagnostics &CD =
@@ -2047,11 +2064,12 @@ AnalysisBasedWarnings::IssueWarnings(sema::AnalysisBasedWarnings::Policy P,
       !Diags.isIgnored(diag::warn_unannotated_fallthrough, D->getLocStart());
   bool FallThroughDiagPerFunction = !Diags.isIgnored(
       diag::warn_unannotated_fallthrough_per_function, D->getLocStart());
-  if (FallThroughDiagFull || FallThroughDiagPerFunction) {
+  if (FallThroughDiagFull || FallThroughDiagPerFunction ||
+      fscope->HasFallthroughStmt) {
     DiagnoseSwitchLabelsFallthrough(S, AC, !FallThroughDiagFull);
   }
 
-  if (S.getLangOpts().ObjCARCWeak &&
+  if (S.getLangOpts().ObjCWeak &&
       !Diags.isIgnored(diag::warn_arc_repeated_use_of_weak, D->getLocStart()))
     diagnoseRepeatedUseOfWeak(S, fscope, D, AC.getParentMap());
 

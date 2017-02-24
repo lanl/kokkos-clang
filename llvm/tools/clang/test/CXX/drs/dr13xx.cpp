@@ -7,9 +7,9 @@ namespace dr1346 { // dr1346: 3.5
   auto a(1); // expected-error 0-1{{extension}}
   auto b(1, 2); // expected-error {{multiple expressions}} expected-error 0-1{{extension}}
 #if __cplusplus >= 201103L
-  auto c({}); // expected-error {{parenthesized initializer list}} expected-error {{cannot deduce}}
-  auto d({1}); // expected-error {{parenthesized initializer list}} expected-error {{<initializer_list>}}
-  auto e({1, 2}); // expected-error {{parenthesized initializer list}} expected-error {{<initializer_list>}}
+  auto c({}); // expected-error {{parenthesized initializer list}}
+  auto d({1}); // expected-error {{parenthesized initializer list}}
+  auto e({1, 2}); // expected-error {{parenthesized initializer list}}
 #endif
   template<typename...Ts> void f(Ts ...ts) { // expected-error 0-1{{extension}}
     auto x(ts...); // expected-error {{empty}} expected-error 0-1{{extension}}
@@ -21,10 +21,26 @@ namespace dr1346 { // dr1346: 3.5
     [a(1)] {} (); // expected-error 0-1{{extension}}
     [b(1, 2)] {} (); // expected-error {{multiple expressions}} expected-error 0-1{{extension}}
 #if __cplusplus >= 201103L
-    [c({})] {} (); // expected-error {{parenthesized initializer list}} expected-error {{cannot deduce}} expected-error 0-1{{extension}}
-    [d({1})] {} (); // expected-error {{parenthesized initializer list}} expected-error {{<initializer_list>}} expected-error 0-1{{extension}}
-    [e({1, 2})] {} (); // expected-error {{parenthesized initializer list}} expected-error {{<initializer_list>}} expected-error 0-1{{extension}}
+    [c({})] {} (); // expected-error {{parenthesized initializer list}} expected-error 0-1{{extension}}
+    [d({1})] {} (); // expected-error {{parenthesized initializer list}} expected-error 0-1{{extension}}
+    [e({1, 2})] {} (); // expected-error {{parenthesized initializer list}} expected-error 0-1{{extension}}
 #endif
   }
+#endif
+}
+
+namespace dr1359 { // dr1359: 3.5
+#if __cplusplus >= 201103L
+  union A { constexpr A() = default; };
+  union B { constexpr B() = default; int a; }; // expected-error {{not constexpr}} expected-note 2{{candidate}}
+  union C { constexpr C() = default; int a, b; }; // expected-error {{not constexpr}} expected-note 2{{candidate}}
+  struct X { constexpr X() = default; union {}; };
+  struct Y { constexpr Y() = default; union { int a; }; }; // expected-error {{not constexpr}} expected-note 2{{candidate}}
+
+  constexpr A a = A();
+  constexpr B b = B(); // expected-error {{no matching}}
+  constexpr C c = C(); // expected-error {{no matching}}
+  constexpr X x = X();
+  constexpr Y y = Y(); // expected-error {{no matching}}
 #endif
 }

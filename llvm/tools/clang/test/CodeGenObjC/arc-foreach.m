@@ -110,9 +110,7 @@ void test1(NSArray *array) {
 
 // CHECK-LP64:      [[D0:%.*]] = getelementptr inbounds [[BLOCK_T]], [[BLOCK_T]]* [[BLOCK]], i32 0, i32 5
 // CHECK-LP64:      [[T0:%.*]] = getelementptr inbounds [[BLOCK_T]], [[BLOCK_T]]* [[BLOCK]], i32 0, i32 5
-// CHECK-LP64-NEXT: [[T1:%.*]] = call i8* @objc_loadWeakRetained(i8** [[X]])
-// CHECK-LP64-NEXT: call i8* @objc_initWeak(i8** [[T0]], i8* [[T1]])
-// CHECK-LP64-NEXT: call void @objc_release(i8* [[T1]]) 
+// CHECK-LP64-NEXT: call void @objc_copyWeak(i8** [[T0]], i8** [[X]])
 // CHECK-LP64-NEXT: [[T1:%.*]] = bitcast [[BLOCK_T]]* [[BLOCK]] to
 // CHECK-LP64: call void @use_block
 // CHECK-LP64-NEXT: call void @objc_destroyWeak(i8** [[D0]])
@@ -171,5 +169,56 @@ void test3(NSArray *array) {
   // CHECK-LP64-NEXT: call void @use(i8* [[T0]])
   // CHECK-LP64-NEXT: br label [[L]]
 }
+
+@interface NSObject @end
+
+@interface I1 : NSObject
+- (NSArray *) foo1:(void (^)(void))block;
+- (void) foo2;
+@end
+
+NSArray *array4;
+
+@implementation I1 : NSObject
+- (NSArray *) foo1:(void (^)(void))block {
+  block();
+  return array4;
+}
+
+- (void) foo2 {
+  for (id x in [self foo1:^{ use(self); }]) {
+    use(x);
+    break;
+  }
+}
+@end
+
+// CHECK-LP64-LABEL: define internal void @"\01-[I1 foo2]"(
+// CHECK-LP64:         [[SELF_ADDR:%.*]] = alloca [[TY:%.*]]*,
+// CHECK-LP64:         [[BLOCK:%.*]] = alloca <{ i8*, i32, i32, i8*, %struct.__block_descriptor*, [[TY]]* }>,
+// CHECK-LP64:         store [[TY]]* %self, [[TY]]** [[SELF_ADDR]]
+// CHECK-LP64:         [[T0:%.*]] = getelementptr inbounds <{ i8*, i32, i32, i8*, %struct.__block_descriptor*, [[TY]]* }>, <{ i8*, i32, i32, i8*, %struct.__block_descriptor*, [[TY]]* }>* [[BLOCK]], i32 0, i32 5
+// CHECK-LP64:         [[BC:%.*]] = getelementptr inbounds <{ i8*, i32, i32, i8*, %struct.__block_descriptor*, [[TY]]* }>, <{ i8*, i32, i32, i8*, %struct.__block_descriptor*, [[TY]]* }>* [[BLOCK]], i32 0, i32 5
+// CHECK-LP64:         [[T1:%.*]] = load [[TY]]*, [[TY]]** [[SELF_ADDR]]
+// CHECK-LP64:         [[T2:%.*]] = bitcast [[TY]]* [[T1]] to i8*
+// CHECK-LP64:         [[T3:%.*]] = call i8* @objc_retain(i8* [[T2]])
+// CHECK-LP64:         [[T4:%.*]] = bitcast i8* [[T3]] to [[TY]]*
+// CHECK-LP64:         store [[TY]]* [[T4]], [[TY]]** [[BC]]
+
+// CHECK-LP64:         [[T5:%.*]] = bitcast [[TY]]** [[T0]] to i8**
+// CHECK-LP64:         call void @objc_storeStrong(i8** [[T5]], i8* null)
+// CHECK-LP64:         switch i32 {{%.*}}, label %[[UNREACHABLE:.*]] [
+// CHECK-LP64-NEXT:      i32 0, label %[[CLEANUP_CONT:.*]]
+// CHECK-LP64-NEXT:      i32 2, label %[[FORCOLL_END:.*]]
+// CHECK-LP64-NEXT:    ]
+
+// CHECK-LP64:       {{^|:}}[[CLEANUP_CONT]]
+// CHECK-LP64-NEXT:    br label %[[FORCOLL_END]]
+
+// CHECK-LP64:       {{^|:}}[[FORCOLL_END]]
+// CHECK-LP64-NEXT:    ret void
+
+// CHECK-LP64:       {{^|:}}[[UNREACHABLE]]
+// CHECK-LP64-NEXT:    unreachable
 
 // CHECK-LP64: attributes [[NUW]] = { nounwind }

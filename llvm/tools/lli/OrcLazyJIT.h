@@ -23,38 +23,34 @@
 #include "llvm/ExecutionEngine/Orc/IRTransformLayer.h"
 #include "llvm/ExecutionEngine/Orc/ObjectLinkingLayer.h"
 #include "llvm/ExecutionEngine/RTDyldMemoryManager.h"
-#include "llvm/IR/LLVMContext.h"
 
 namespace llvm {
 
 class OrcLazyJIT {
 public:
 
-  typedef orc::JITCompileCallbackManagerBase CompileCallbackMgr;
+  typedef orc::JITCompileCallbackManager CompileCallbackMgr;
   typedef orc::ObjectLinkingLayer<> ObjLayerT;
   typedef orc::IRCompileLayer<ObjLayerT> CompileLayerT;
   typedef std::function<std::unique_ptr<Module>(std::unique_ptr<Module>)>
     TransformFtor;
   typedef orc::IRTransformLayer<CompileLayerT, TransformFtor> IRDumpLayerT;
   typedef orc::CompileOnDemandLayer<IRDumpLayerT, CompileCallbackMgr> CODLayerT;
+  typedef CODLayerT::IndirectStubsManagerBuilderT
+    IndirectStubsManagerBuilder;
   typedef CODLayerT::ModuleSetHandleT ModuleHandleT;
 
-  typedef std::function<
-            std::unique_ptr<CompileCallbackMgr>(IRDumpLayerT&,
-                                                RuntimeDyld::MemoryManager&,
-                                                LLVMContext&)>
-    CallbackManagerBuilder;
-
-  static CallbackManagerBuilder createCallbackManagerBuilder(Triple T);
-  const DataLayout &DL;
-
-  OrcLazyJIT(std::unique_ptr<TargetMachine> TM, const DataLayout &DL,
-             LLVMContext &Context, CallbackManagerBuilder &BuildCallbackMgr)
-      : DL(DL), TM(std::move(TM)), ObjectLayer(),
+  OrcLazyJIT(std::unique_ptr<TargetMachine> TM,
+             std::unique_ptr<CompileCallbackMgr> CCMgr,
+             IndirectStubsManagerBuilder IndirectStubsMgrBuilder,
+             bool InlineStubs)
+      : TM(std::move(TM)), DL(this->TM->createDataLayout()),
+	CCMgr(std::move(CCMgr)),
+	ObjectLayer(),
         CompileLayer(ObjectLayer, orc::SimpleCompiler(*this->TM)),
         IRDumpLayer(CompileLayer, createDebugDumper()),
-        CCMgr(BuildCallbackMgr(IRDumpLayer, CCMgrMemMgr, Context)),
-        CODLayer(IRDumpLayer, *CCMgr, false),
+        CODLayer(IRDumpLayer, extractSingleFunction, *this->CCMgr,
+                 std::move(IndirectStubsMgrBuilder), InlineStubs),
         CXXRuntimeOverrides(
             [this](const std::string &S) { return mangle(S); }) {}
 
@@ -64,11 +60,6 @@ public:
     // Run any IR destructors.
     for (auto &DtorRunner : IRStaticDestructorRunners)
       DtorRunner.runViaLayer(CODLayer);
-  }
-
-  template <typename PtrTy>
-  static PtrTy fromTargetAddress(orc::TargetAddress Addr) {
-    return reinterpret_cast<PtrTy>(static_cast<uintptr_t>(Addr));
   }
 
   ModuleHandleT addModule(std::unique_ptr<Module> M) {
@@ -88,12 +79,11 @@ public:
     //   1) Search the JIT symbols.
     //   2) Check for C++ runtime overrides.
     //   3) Search the host process (LLI)'s symbol table.
-    std::shared_ptr<RuntimeDyld::SymbolResolver> Resolver =
+    auto Resolver =
       orc::createLambdaResolver(
         [this](const std::string &Name) {
           if (auto Sym = CODLayer.findSymbol(Name, true))
-            return RuntimeDyld::SymbolInfo(Sym.getAddress(),
-                                           Sym.getFlags());
+            return Sym.toRuntimeDyldSymbol();
           if (auto Sym = CXXRuntimeOverrides.searchOverrides(Name))
             return Sym;
 
@@ -111,7 +101,9 @@ public:
     // Add the module to the JIT.
     std::vector<std::unique_ptr<Module>> S;
     S.push_back(std::move(M));
-    auto H = CODLayer.addModuleSet(std::move(S), nullptr, std::move(Resolver));
+    auto H = CODLayer.addModuleSet(std::move(S),
+				   llvm::make_unique<SectionMemoryManager>(),
+				   std::move(Resolver));
 
     // Run the static constructors, and save the static destructor runner for
     // execution when the JIT is torn down.
@@ -132,6 +124,7 @@ public:
   }
 
 private:
+
   std::string mangle(const std::string &Name) {
     std::string MangledName;
     {
@@ -141,15 +134,22 @@ private:
     return MangledName;
   }
 
+  static std::set<Function*> extractSingleFunction(Function &F) {
+    std::set<Function*> Partition;
+    Partition.insert(&F);
+    return Partition;
+  }
+
   static TransformFtor createDebugDumper();
 
   std::unique_ptr<TargetMachine> TM;
+  DataLayout DL;
   SectionMemoryManager CCMgrMemMgr;
 
+  std::unique_ptr<CompileCallbackMgr> CCMgr;
   ObjLayerT ObjectLayer;
   CompileLayerT CompileLayer;
   IRDumpLayerT IRDumpLayer;
-  std::unique_ptr<CompileCallbackMgr> CCMgr;
   CODLayerT CODLayer;
 
   orc::LocalCXXRuntimeOverrides CXXRuntimeOverrides;
