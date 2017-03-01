@@ -46,10 +46,13 @@
 #include <Kokkos_Core.hpp>
 #include <cstdio>
 #include <iostream>
+#include "stdint.h"
 
 using namespace std;
 
 const size_t SIZE = 16;
+const size_t N = 4096;
+const size_t M = 1024;
 
 void dump(long *x) {
   for (long i=0; i< 8; i++) {
@@ -61,18 +64,27 @@ void dumper(void **x) {
   for (long i=0; i< 8; i++) {
     fprintf(stderr,"%ld %ld %p\n",i, x[i],x[i]);
   }
-  long *data = (long *)x[2];
-  for (long i=0; i< 8; i++) {
-    fprintf(stderr,"A %ld %ld\n",i, data[i]);
-  }
+ uint64_t *data = (uint64_t *)x[0];
+ for (long i=0; i< 8; i++) {
+   fprintf(stderr,"A0 %ld %ld\n",i,data[i]);
+ }
+ double *datad = (double *)x[1];
+ for (long i=0; i< 8; i++) {
+   fprintf(stderr,"A1 %ld %lf\n",i,datad[i]);
+ }
 }
+
 int main (int argc, char* argv[]) {
   Kokkos::initialize (argc, argv);
 
+  //typedef Kokkos::View<long*[2]> view_type;
+  typedef Kokkos::View<double*>   ViewVectorType;
+  typedef Kokkos::View<double**>   ViewMatrixType;
 
-  typedef Kokkos::View<long*[2]> view_type;
-
-  view_type a ("A", SIZE);
+  //view_type a ("A", SIZE);
+  ViewVectorType y("y", SIZE);
+  ViewVectorType x("x", M);
+  ViewMatrixType a("A", N, M);
 
   for(size_t i = 0; i < SIZE; ++i){
     a(i, 0) = i;
@@ -80,9 +92,15 @@ int main (int argc, char* argv[]) {
   }
 
   void *p = &a;
-  fprintf(stderr,"%p\n",p);
-  dump((long *)p);
+  fprintf(stderr,"A\n");
+  //dump((long *)p);
   dumper(&p);
+  void *p2 = &x;
+  fprintf(stderr,"X\n");
+  dumper(&p2);
+  void *p3 = &y;
+  fprintf(stderr,"Y\n");
+  dumper(&p3);
 
   Kokkos::parallel_for (SIZE, KOKKOS_LAMBDA (const int i) {
     a(i, 0) += i * 100;
