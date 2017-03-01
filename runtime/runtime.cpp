@@ -891,7 +891,13 @@ namespace{
                  uint32_t staticDims,
                  uint32_t* staticSizes,
                  uint32_t runTimeDims){
-    
+   
+#if 0 
+      for(int i=0; i<8;i++) {
+        fprintf(stderr,"viewptr[%d] = %ld %p\n",i,viewPtr[i],viewPtr[i]);
+      }
+#endif
+
       // offset based on Kokkos view layout which
       // may change in future versions (has changed in the past...) -dpx  
       void* data = viewPtr[1];
@@ -906,12 +912,13 @@ namespace{
 
       // offset based on Kokkos view layout -dpx
       viewPtr+=2;
-      uint32_t* sizes = (uint32_t*)viewPtr;
+      uint64_t* sizes = (uint64_t*)viewPtr;
 
       size_t size = elementSize;
 
       for(size_t i = 0; i < runTimeDims; ++i){
-        uint32_t si = *sizes;
+        uint64_t si = *sizes;
+        //fprintf(stderr,"sizes %ld %ld\n",i,si);   
         size *= si;
 
         view->pushDim(si);
@@ -925,6 +932,7 @@ namespace{
 
         view->pushDim(si);
       }
+
 
       CUdeviceptr devPtr;
       CUresult err = cuMemAlloc(&devPtr, size);
