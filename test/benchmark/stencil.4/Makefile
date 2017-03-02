@@ -6,7 +6,7 @@ default: build
 
 CXX = ../../../build/llvm/bin/clang++ -std=c++14 -isystem /projects/opt/centos7/gcc/5.2.0/include/c++/5.2.0 -I/projects/opt/centos7/gcc/5.2.0/include/c++/5.2.0/x86_64-unknown-linux-gnu
 LINK = ${CXX}
-LINKFLAGS = -L/home/nickm/kokkos-clang/build/runtime -L/usr/local/cuda/lib64 -L/projects/opt/centos7/gcc/5.2.0/packages/gcc-5.2.0/lib64 
+LINKFLAGS = -L../../../build/runtime -L/usr/local/cuda/lib64 -L/projects/opt/centos7/gcc/5.2.0/packages/gcc-5.2.0/lib64 
 EXE = $(SRC:.cpp=.host)
 KOKKOS_DEVICES = "Pthread"
 KOKKOS_ARCH = "SNB"

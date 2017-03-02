@@ -1,0 +1,3 @@
+  Total size S = 4194304 M = 1024 N = 4096
+  Computed result for 4096 x 1024 is 4194304.000000
+  M( 1024 ) N( 4096 ) nrepeat ( 1000 ) problem( 33.5954 MB ) time( 10.7982 s ) bandwidth( 3.1112 GB/s )
