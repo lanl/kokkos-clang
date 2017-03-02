@@ -892,12 +892,6 @@ namespace{
                  uint32_t* staticSizes,
                  uint32_t runTimeDims){
    
-#if 0 
-      for(int i=0; i<8;i++) {
-        fprintf(stderr,"viewptr[%d] = %ld %p\n",i,viewPtr[i],viewPtr[i]);
-      }
-#endif
-
       // offset based on Kokkos view layout which
       // may change in future versions (has changed in the past...) -dpx  
       void* data = viewPtr[1];
@@ -1025,11 +1019,12 @@ namespace{
 
     void awaitKernel(uint32_t kernelId){ 
       auto itr = kernelMap_.find(kernelId);
-      assert(itr != kernelMap_.end());
-
-      Kernel* kernel = itr->second;
-
-      kernel->await();
+      if (itr != kernelMap_.end()) {
+        Kernel* kernel = itr->second;
+        kernel->await();
+      } else {
+        fprintf(stderr, "missing kernelId = %d\n", kernelId);
+      }
     }
 
     void copyViewToDevice(void** viewPtr){
