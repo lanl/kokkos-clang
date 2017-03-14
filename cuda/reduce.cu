@@ -50,7 +50,12 @@
 
 #include <cuda.h>
 
+
+#ifdef NEW
+#include "cub-1.6.4/device/device_reduce.cuh"
+#else
 #include "mcub/device/device_reduce.cuh"
+#endif
 
 #define check(err) if(err != CUDA_SUCCESS){ \
       const char* s; \
