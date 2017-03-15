@@ -81,7 +81,7 @@ public:
     else if(f->getQualifiedNameAsString() == "Kokkos::parallel_reduce"){
       reduceVar_ = md->getParamDecl(1);
       assert(md->getNumParams() == 2);
-      assert(E->getNumArgs() == 5);
+      //assert(E->getNumArgs() == 5); // kokkos interface change -dpx
     }
     else{
       assert(false && "expected parallel for or reduce");
