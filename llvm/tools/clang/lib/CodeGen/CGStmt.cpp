@@ -47,12 +47,13 @@
 #include "llvm/Transforms/Scalar/GVN.h"
 #include "clang/Analysis/ParallelAnalysis.h"
 #include "llvm/CodeGen/CommandFlags.h"
+#include "llvm/ADT/StringMap.h" 
 
 #include <unordered_set>
 #include <fstream>
 
-namespace llvm{
-  extern ModulePass* createNVVMReflectPass(const StringMap<int>& Mapping);
+namespace llvm {
+ extern FunctionPass* createNVVMReflectPass(const StringMap<int>& Mapping);
 }
 
 // ======================================
@@ -736,6 +737,7 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
 
     auto aitr2 = reduceFunc->arg_begin();
     for(auto& arg : reduceFunc->args()){
+      (void)arg;
       if(j >= m){
         break;
       }
@@ -916,6 +918,7 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
     B.SetInsertPoint(Cond12Block);
 
     Value* idx0 = B.CreateGEP(reduceShared, i0);
+    (void)idx0;
     val = B.CreateLoad(ideasAddr(sPtr));
     Value* idxOut = B.CreateGEP(reduceArray, blockIdx);
     B.CreateStore(val, ideasAddr(idxOut));
@@ -994,8 +997,9 @@ void CodeGenFunction::EmitParallelConstructPTX(const CallExpr* E){
   passManager->add(createVerifierPass());
 
   StringMap<int> ReflectParams;
-  ReflectParams["__CUDA_FTZ"] = 1;
-  passManager->add(createNVVMReflectPass(ReflectParams));
+  ReflectParams.insert(std::make_pair(StringRef("__CUDA_FTZ"), 1));
+  //passManager->add(createNVVMReflectPass(ReflectParams)); // undefined reference to 'llvm::createNVVMReflectPass(llvm::StringMap<int, llvm::MallocAllocator> const&)'
+
 
   passManager->add(createInstructionCombiningPass());
   passManager->add(createReassociatePass());
@@ -1344,6 +1348,7 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
 
   if(reduceVar){
     llvm::Type* rt = ConvertType(reduceVar->getType().getNonReferenceType());
+    (void)rt;
 
     TypeVec reduceParams;
     reduceParams.push_back(Int32Ty);
@@ -1473,7 +1478,7 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
   else{
     auto aitr = func->arg_begin();
 
-    Value* reduceArray;
+    //Value* reduceArray;
 
     for(const VarDecl* vd : pc.viewVars){
       aitr->setName(vd->getName());
@@ -1632,8 +1637,8 @@ void CodeGenFunction::EmitParallelConstructPTX3(const CallExpr* E){
   passManager->add(createVerifierPass());
 
   StringMap<int> ReflectParams;
-  ReflectParams["__CUDA_FTZ"] = 1;
-  passManager->add(createNVVMReflectPass(ReflectParams));
+  ReflectParams.insert(std::make_pair(StringRef("__CUDA_FTZ"), 1));
+  //passManager->add(createNVVMReflectPass(ReflectParams)); // undefined reference to 'llvm::createNVVMReflectPass(llvm::StringMap<int, llvm::MallocAllocator> const&)'
 
   passManager->add(createInstructionCombiningPass());
   passManager->add(createReassociatePass());
@@ -1922,11 +1927,11 @@ llvm::Value* CodeGenFunction::GetOrCreateKokkosView(const VarDecl* vd){
   using namespace std;
 
   using ValueVec = vector<Value*>;
-  using TypeVec = vector<llvm::Type*>;
+  //using TypeVec = vector<llvm::Type*>;
 
   auto& B = Builder;
   auto& R = CGM.getIdeasRuntime();
-  LLVMContext& C = getLLVMContext();
+  //LLVMContext& C = getLLVMContext();
 
 
   CreateKokkosViewTypeInfo(vd);
@@ -1973,13 +1978,13 @@ llvm::Value* CodeGenFunction::GetOrCreateKokkosArray(const VarDecl* vd){
   using namespace std;
 
   using ValueVec = vector<Value*>;
-  using TypeVec = vector<llvm::Type*>;
+  //using TypeVec = vector<llvm::Type*>;
 
   auto& B = Builder;
   auto& R = CGM.getIdeasRuntime();
-  LLVMContext& C = getLLVMContext();
+  //LLVMContext& C = getLLVMContext();
 
-  auto aitr = arrayInfoMap_.find(vd);
+  //auto aitr = arrayInfoMap_.find(vd);
 
   CreateKokkosArrayTypeInfo(vd);
 
@@ -2016,11 +2021,11 @@ void CodeGenFunction::CopyKokkosDataToDevice(const Stmt* S){
     using namespace std;
 
     using ValueVec = vector<Value*>;
-    using TypeVec = vector<llvm::Type*>;
+    //using TypeVec = vector<llvm::Type*>;
 
     auto& B = Builder;
     auto& R = CGM.getIdeasRuntime();
-    LLVMContext& C = getLLVMContext();
+    //LLVMContext& C = getLLVMContext();
 
     const Stmt* stmt;
     if(auto e = dyn_cast<ExprWithCleanups>(S)){
@@ -2057,11 +2062,11 @@ void CodeGenFunction::CopyKokkosDataFromDevice(const Stmt* S){
     using namespace std;
 
     using ValueVec = vector<Value*>;
-    using TypeVec = vector<llvm::Type*>;
+    //using TypeVec = vector<llvm::Type*>;
 
     auto& B = Builder;
     auto& R = CGM.getIdeasRuntime();
-    LLVMContext& C = getLLVMContext();
+    //LLVMContext& C = getLLVMContext();
 
     const Stmt* stmt;
     if(auto e = dyn_cast<ExprWithCleanups>(S)){
@@ -2119,11 +2124,11 @@ void CodeGenFunction::KokkosSynchronize(const Stmt *S){
     using namespace std;
 
     using ValueVec = vector<Value*>;
-    using TypeVec = vector<llvm::Type*>;
+    //using TypeVec = vector<llvm::Type*>;
 
     auto& B = Builder;
     auto& R = CGM.getIdeasRuntime();
-    LLVMContext& C = getLLVMContext();
+    //LLVMContext& C = getLLVMContext();
 
     auto& sv = ParallelAnalysis::synchStmts();
 
@@ -3948,7 +3953,7 @@ llvm::Value* CodeGenFunction::EmitAsmInput(
 /// asm call instruction.  The !srcloc MDNode contains a list of constant
 /// integers which are the source locations of the start of each line in the
 /// asm.
-static llvm::MDNode *getAsmSrcLocInfo(const StringLiteral *Str,
+static llvm::MDNode *getAsmSrcLocInfo(const clang::StringLiteral *Str,
                                       CodeGenFunction &CGF) {
   SmallVector<llvm::Metadata *, 8> Locs;
   // Add the location of the first line to the MDNode.
