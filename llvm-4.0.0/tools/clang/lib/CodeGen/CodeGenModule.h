@@ -93,6 +93,9 @@ class BlockFieldFlags;
 class FunctionArgList;
 class CoverageMappingModuleGen;
 class TargetCodeGenInfo;
+// +===== ideas ============
+class CGIdeasRuntime;
+// ========================
 
 enum ForDefinition_t : bool {
   NotForDefinition = false,
@@ -301,6 +304,11 @@ private:
   InstrProfStats PGOStats;
   std::unique_ptr<llvm::SanitizerStatReport> SanStats;
 
+  // +===== ideas ======================
+  CGIdeasRuntime* IdeasRuntime;
+  // ==================================
+
+
   // A set of references that have only been seen via a weakref so far. This is
   // used to remove the weak of the reference if we ever see a direct reference
   // or a definition.
@@ -452,6 +460,11 @@ private:
   void createOpenMPRuntime();
   void createCUDARuntime();
 
+  // ===== ideas ==========================
+  void createIdeasRuntime();
+  // ======================================
+
+
   bool isTriviallyRecursive(const FunctionDecl *F);
   bool shouldEmitFunction(GlobalDecl GD);
 
@@ -540,6 +553,14 @@ public:
     assert(CUDARuntime != nullptr);
     return *CUDARuntime;
   }
+
+  // +===== ideas ================
+  CGIdeasRuntime &getIdeasRuntime() {
+    assert(IdeasRuntime != nullptr);
+    return *IdeasRuntime;
+  }
+  // ============================
+
 
   ObjCEntrypoints &getObjCEntrypoints() const {
     assert(ObjCData != nullptr);

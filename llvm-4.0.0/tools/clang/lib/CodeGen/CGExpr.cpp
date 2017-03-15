@@ -2129,6 +2129,13 @@ LValue CodeGenFunction::EmitDeclRefLValue(const DeclRefExpr *E) {
 
     // Check for captured variables.
     if (E->refersToEnclosingVariableOrCapture()) {
+       // +===== ideas
+      auto itr = parallelForParamMap_.find(VD);
+      if(itr != parallelForParamMap_.end()){
+        return MakeAddrLValue(ideasAddr(itr->second), T);
+      }
+      // ============
+
       if (auto *FD = LambdaCaptureFields.lookup(VD))
         return EmitCapturedFieldLValue(*this, FD, CXXABIThisValue);
       else if (CapturedStmtInfo) {
@@ -3822,6 +3829,24 @@ RValue CodeGenFunction::EmitRValueForField(LValue LV,
 
 RValue CodeGenFunction::EmitCallExpr(const CallExpr *E,
                                      ReturnValueSlot ReturnValue) {
+
+  // +====== ideas =============================
+  if(isMainStmt(E)){
+    const FunctionDecl* f = E->getDirectCallee();
+    if(f){
+      if(f->getQualifiedNameAsString() == "Kokkos::parallel_for" ||
+         f->getQualifiedNameAsString() == "Kokkos::parallel_reduce"){
+        //EmitParallelFor(E, PFK_Threads);
+        EmitParallelConstructPTX(E);
+        //EmitParallelConstructPTX3(E);
+        return RValue::get(nullptr);
+      }
+    }
+  }
+  // ===========================================
+
+
+
   // Builtins never have block type.
   if (E->getCallee()->getType()->isBlockPointerType())
     return EmitBlockCallExpr(E, ReturnValue);

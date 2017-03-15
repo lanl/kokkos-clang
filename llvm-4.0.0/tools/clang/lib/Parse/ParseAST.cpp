@@ -25,6 +25,10 @@
 #include <cstdio>
 #include <memory>
 
+// +===== ideas
+#include "clang/Analysis/ParallelAnalysis.h"
+// ================
+
 using namespace clang;
 
 namespace {
@@ -145,6 +149,21 @@ void clang::ParseAST(Sema &S, bool PrintStats, bool SkipFunctionBodies) {
 
   for (bool AtEOF = P.ParseFirstTopLevelDecl(ADecl); !AtEOF;
        AtEOF = P.ParseTopLevelDecl(ADecl)) {
+    
+    // +===== ideas
+      DeclGroupRef dr = ADecl.get();
+      if(dr.isSingleDecl()){
+        Decl* d = dr.getSingleDecl();
+        if(d){
+          FunctionDecl* fd = dyn_cast<FunctionDecl>(d);
+          if(fd && fd->hasBody() && S.SourceMgr.isInMainFile(fd->getLocStart())){
+            ParallelAnalysis::Run(S, fd);
+          }
+        }
+      }
+    // ===========
+
+
     // If we got a null return and something *was* parsed, ignore it.  This
     // is due to a top-level semicolon, an action override, or a parse error
     // skipping something.

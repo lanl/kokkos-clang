@@ -56,6 +56,11 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MD5.h"
 
+// +====== ideas =========================
+#include "ideas/CGIdeasRuntime.h"
+// ======================================
+
+
 using namespace clang;
 using namespace CodeGen;
 
@@ -123,6 +128,10 @@ CodeGenModule::CodeGenModule(ASTContext &C, const HeaderSearchOptions &HSO,
     createOpenMPRuntime();
   if (LangOpts.CUDA)
     createCUDARuntime();
+
+  // +===== ideas ===================
+  createIdeasRuntime();
+  // ================================
 
   // Enable TBAA unless it's suppressed. ThreadSanitizer needs TBAA even at O0.
   if (LangOpts.Sanitize.has(SanitizerKind::Thread) ||
@@ -206,6 +215,13 @@ void CodeGenModule::createOpenMPRuntime() {
 void CodeGenModule::createCUDARuntime() {
   CUDARuntime.reset(CreateNVCUDARuntime(*this));
 }
+
+
+// +===== ideas ==============================
+void CodeGenModule::createIdeasRuntime() {
+  IdeasRuntime = new CGIdeasRuntime(*this);
+}
+// ===========================================
 
 void CodeGenModule::addReplacement(StringRef Name, llvm::Constant *C) {
   Replacements[Name] = C;

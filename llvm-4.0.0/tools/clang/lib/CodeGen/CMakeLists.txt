@@ -84,6 +84,10 @@ add_clang_library(clangCodeGen
   SwiftCallingConv.cpp
   TargetInfo.cpp
   VarBypassDetector.cpp
+  # +===== ideas ==============
+  ideas/CGIdeasRuntime.cpp
+  ideas/ASTVisitors.cpp
+  # ===========================
 
   DEPENDS
   ${codegen_deps}

@@ -48,6 +48,11 @@
 #include <memory>
 #include <set>
 #include <system_error>
+// +===== ideas ========================================================+
+#include <unistd.h>
+#include <iostream>
+#include <sstream>
+// +====================================================================+
 using namespace clang;
 using namespace clang::driver;
 using namespace llvm::opt;
@@ -366,6 +371,20 @@ int main(int argc_, const char **argv_) {
   if (MarkEOLs && argv.size() > 1 && StringRef(argv[1]).startswith("-cc1"))
     MarkEOLs = false;
   llvm::cl::ExpandResponseFiles(Saver, Tokenizer, argv, MarkEOLs);
+
+  // +===== ideas ===========================================================+
+  //-debug flag
+  for (int i = 2, size = argv.size(); i < size; ++i) {
+    if ( argv[i] != NULL && StringRef(argv[i]) == "-debug") {
+      size_t pid = getpid();
+
+      std::cerr << "PID: " << pid << std::endl;
+      std::cerr << "<press any key after attaching debugger, then 'continue' in debugger>" << std::endl;
+      std::string str;
+      std::getline(std::cin, str);
+    }
+  }
+ // +=======================================================================+
 
   // Handle -cc1 integrated tools, even if -cc1 was expanded from a response
   // file.

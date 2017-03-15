@@ -39,6 +39,18 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Transforms/Utils/SanitizerStats.h"
 
+// +===== ideas ==============================
+
+#include <iostream>
+#include <unordered_set>
+
+#include "clang/CodeGen/ideas/shared.h"
+
+#define np(X) llvm::errs() << __FILE__ << ":" << __LINE__ << ": " << \
+__PRETTY_FUNCTION__ << ": " << #X << " = " << X << "\n"
+
+// ===========================================
+
 namespace llvm {
 class BasicBlock;
 class LLVMContext;
@@ -137,6 +149,40 @@ class CodeGenFunction : public CodeGenTypeCache {
 
   friend class CGCXXABI;
 public:
+   // +====== ideas =================================
+  bool isMainStmt(const Stmt* S){
+    return getContext().getSourceManager().isInMainFile(S->getLocStart());
+  }
+
+  void EmitParallelFor(const CallExpr* E,
+                       ParallelForKind K);
+
+  void EmitParallelConstructPTX(const CallExpr* E);
+
+  void EmitParallelConstructPTX3(const CallExpr* E);
+
+  Address ideasAddr(llvm::Value* v){
+    return Address(v, getPointerAlign());
+  }
+
+  llvm::Value* GetOrCreateKokkosView(const VarDecl* VD);
+
+  llvm::Value* GetOrCreateKokkosArray(const VarDecl* VD);
+
+  void CreateKokkosViewTypeInfo(const VarDecl* VD);
+
+  void CreateKokkosArrayTypeInfo(const VarDecl* VD);
+
+  void CopyKokkosDataToDevice(const Stmt* S);
+
+  void CopyKokkosDataFromDevice(const Stmt* S);
+
+  void KokkosSynchronize(const Stmt* S);
+
+  bool KokkosContains(const Stmt* Parent, const Stmt* S);
+
+  // +==============================================
+
   /// A jump destination is an abstract label, branching to which may
   /// require a jump out through normal cleanups.
   struct JumpDest {
@@ -1293,6 +1339,29 @@ public:
   };
 
 private:
+
+  // +===== ideas
+  struct ViewInfo{
+    bool created = false;
+    QualType elementType;
+    std::vector<uint32_t> staticSizes;
+    size_t runtimeDims;
+  };
+
+  struct ArrayInfo{
+    bool created = false;
+    QualType elementType;
+    llvm::Value* size;
+  };
+
+  std::vector<ParallelForInfo*> parallelForStack_;
+  std::map<const VarDecl*, llvm::Value*> parallelForParamMap_;
+  std::map<const VarDecl*, llvm::Value*> parallelForParamDimMap_;
+  std::map<const VarDecl*, ViewInfo> viewInfoMap_;
+  std::map<const VarDecl*, ArrayInfo> arrayInfoMap_;
+  // ============
+
+
   /// CXXThisDecl - When generating code for a C++ member function,
   /// this will hold the implicit 'this' declaration.
   ImplicitParamDecl *CXXABIThisDecl;
